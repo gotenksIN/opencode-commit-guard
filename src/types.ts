@@ -40,7 +40,6 @@ export type ShellTokenType = "word" | "operator" | "redirect"
 export interface ShellToken {
   readonly type: ShellTokenType
   readonly value: string
-  readonly hasExpansion?: boolean
   readonly substitutions?: readonly string[]
 }
 
@@ -51,7 +50,6 @@ export interface GitCommitInvocation {
   readonly isAmend: boolean
   readonly hasNoEdit?: boolean
   readonly isHelp: boolean
-  readonly unverifiableInputs?: readonly string[]
   readonly directoryChanges?: readonly string[]
 }
 

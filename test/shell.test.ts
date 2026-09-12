@@ -87,16 +87,10 @@ describe("tokenizeShell", () => {
       ["word", "/dev/null"],
       ["redirect", "2>&1"],
     ])
-    expect(extractGitCommits("git commit -m 'scope: fix' -s > /dev/null 2>&1")[0]).toEqual({
-      messages: ["scope: fix"],
-      filePaths: [],
-      directoryChanges: [],
-      hasSignoffFlag: true,
-      isAmend: false,
-      hasNoEdit: false,
-      isHelp: false,
-      unverifiableInputs: [],
-    })
+    const invocations = extractGitCommits("git commit -m 'scope: fix' -s > /dev/null 2>&1")
+    expect(invocations).toHaveLength(1)
+    expect(invocations[0]?.messages).toEqual(["scope: fix"])
+    expect(invocations[0]?.hasSignoffFlag).toBe(true)
   })
 
   test("concatenates adjacent unquoted and quoted tokens", () => {

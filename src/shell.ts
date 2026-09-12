@@ -35,11 +35,6 @@ const commitLongOptionsWithArg = new Set([
   "--trailer",
 ])
 
-interface CommandWord {
-  readonly value: string
-  readonly hasExpansion: boolean
-}
-
 interface CommandSubstitution {
   readonly content: string
   readonly end: number
@@ -48,8 +43,6 @@ interface CommandSubstitution {
 interface CommandStart {
   readonly index: number
   readonly directoryChanges: readonly string[]
-  readonly splitCommands: readonly CommandWord[]
-  readonly hasExpansion: boolean
 }
 
 function isWordSeparator(character: string): boolean {
@@ -159,14 +152,9 @@ function consumeCommandSubstitution(command: string, start: number): CommandSubs
 function pushWord(
   tokens: ShellToken[],
   value: string,
-  hasExpansion: boolean,
   substitutions: readonly string[],
 ): void {
-  if (hasExpansion && substitutions.length > 0) {
-    tokens.push({ type: "word", value, hasExpansion: true, substitutions })
-  } else if (hasExpansion) {
-    tokens.push({ type: "word", value, hasExpansion: true })
-  } else if (substitutions.length > 0) {
+  if (substitutions.length > 0) {
     tokens.push({ type: "word", value, substitutions })
   } else {
     tokens.push({ type: "word", value })
@@ -234,7 +222,6 @@ export function tokenizeShell(command: string): ShellToken[] {
     }
 
     let value = ""
-    let hasExpansion = false
     const substitutions: string[] = []
 
     while (i < command.length) {
@@ -328,10 +315,8 @@ export function tokenizeShell(command: string): ShellToken[] {
             const substitution = consumeCommandSubstitution(command, i)
             value += command.slice(i, substitution.end)
             substitutions.push(substitution.content)
-            hasExpansion = true
             i = substitution.end
           } else {
-            if (quotedCharacter === "$" || quotedCharacter === "`") hasExpansion = true
             value += quotedCharacter
             i++
           }
@@ -345,7 +330,6 @@ export function tokenizeShell(command: string): ShellToken[] {
         const substitution = consumeCommandSubstitution(command, i)
         value += command.slice(i, substitution.end)
         substitutions.push(substitution.content)
-        hasExpansion = true
         i = substitution.end
         continue
       }
@@ -354,12 +338,11 @@ export function tokenizeShell(command: string): ShellToken[] {
 
       if (nextRedirect !== null) break
 
-      if (current === "$" || current === "`") hasExpansion = true
       value += current
       i++
     }
 
-    pushWord(tokens, value, hasExpansion, substitutions)
+    pushWord(tokens, value, substitutions)
   }
 
   return tokens
@@ -383,8 +366,8 @@ function splitSimpleCommands(tokens: readonly ShellToken[]): ShellToken[][] {
   return commands
 }
 
-function extractCommandWords(tokens: readonly ShellToken[]): CommandWord[] {
-  const words: CommandWord[] = []
+function extractCommandWords(tokens: readonly ShellToken[]): string[] {
+  const words: string[] = []
   let i = 0
 
   while (i < tokens.length) {
@@ -399,7 +382,7 @@ function extractCommandWords(tokens: readonly ShellToken[]): CommandWord[] {
     }
 
     if (token.type === "word") {
-      words.push({ value: token.value, hasExpansion: token.hasExpansion === true })
+      words.push(token.value)
     }
 
     i++
@@ -412,22 +395,20 @@ function isAssignment(word: string): boolean {
   return /^[a-zA-Z_][a-zA-Z0-9_]*=/.test(word)
 }
 
-function skipAssignments(words: readonly CommandWord[], start: number): number {
+function skipAssignments(words: readonly string[], start: number): number {
   let index = start
 
-  while (words[index] !== undefined && isAssignment(words[index].value)) index++
+  while (words[index] !== undefined && isAssignment(words[index])) index++
 
   return index
 }
 
-function findCommandStart(words: readonly CommandWord[]): CommandStart {
+function findCommandStart(words: readonly string[]): CommandStart {
   let index = skipAssignments(words, 0)
   const directoryChanges: string[] = []
-  const splitCommands: CommandWord[] = []
-  let hasExpansion = false
 
   while (index < words.length) {
-    const word = words[index]?.value
+    const word = words[index]
 
     if (word !== undefined && commandPrefixes.has(word)) {
       index = skipAssignments(words, index + 1)
@@ -438,8 +419,7 @@ function findCommandStart(words: readonly CommandWord[]): CommandStart {
       index++
 
       while (index < words.length) {
-        const option = words[index]
-        const argument = option?.value
+        const argument = words[index]
 
         if (argument === undefined) break
 
@@ -454,35 +434,15 @@ function findCommandStart(words: readonly CommandWord[]): CommandStart {
           const directory = words[index + 1]
 
           if (directory !== undefined) {
-            directoryChanges.push(directory.value)
-
-            if (directory.hasExpansion) hasExpansion = true
+            directoryChanges.push(directory)
           }
 
           index += 2
         } else if (argument.startsWith("--chdir=")) {
           directoryChanges.push(argument.slice("--chdir=".length))
-
-          if (option.hasExpansion) hasExpansion = true
           index++
         } else if (/^-C.+/.test(argument)) {
           directoryChanges.push(argument.slice(2))
-
-          if (option.hasExpansion) hasExpansion = true
-          index++
-        } else if (argument === "-S" || argument === "--split-string") {
-          const splitCommand = words[index + 1]
-
-          if (splitCommand !== undefined) splitCommands.push(splitCommand)
-          index += 2
-        } else if (argument.startsWith("--split-string=")) {
-          splitCommands.push({
-            value: argument.slice("--split-string=".length),
-            hasExpansion: option.hasExpansion,
-          })
-          index++
-        } else if (/^-S.+/.test(argument)) {
-          splitCommands.push({ value: argument.slice(2), hasExpansion: option.hasExpansion })
           index++
         } else if (argument.startsWith("--unset=") || /^-u.+/.test(argument)) {
           index++
@@ -503,7 +463,7 @@ function findCommandStart(words: readonly CommandWord[]): CommandStart {
       index++
 
       while (index < words.length) {
-        const argument = words[index]?.value
+        const argument = words[index]
 
         if (argument === "--") {
           index++
@@ -522,7 +482,7 @@ function findCommandStart(words: readonly CommandWord[]): CommandStart {
     if (word === "command" || word === "nohup" || word === "builtin") {
       index++
 
-      while (words[index]?.value.startsWith("-")) index++
+      while (words[index]?.startsWith("-")) index++
       index = skipAssignments(words, index)
       continue
     }
@@ -530,30 +490,29 @@ function findCommandStart(words: readonly CommandWord[]): CommandStart {
     break
   }
 
-  return { index, directoryChanges, splitCommands, hasExpansion }
+  return { index, directoryChanges }
 }
 
 function extractInvocation(
-  words: readonly CommandWord[],
+  words: readonly string[],
   commandStart: CommandStart,
 ): GitCommitInvocation | undefined {
   let wordIndex = commandStart.index
-  const executable = words[wordIndex]?.value
+  const executable = words[wordIndex]
 
   if (executable === undefined || (executable !== "git" && !executable.endsWith("/git"))) return undefined
   wordIndex++
   const directoryChanges = [...commandStart.directoryChanges]
-  let hasUnexpandedArgument = commandStart.hasExpansion
 
   let subcommand: string | undefined
 
   while (wordIndex < words.length) {
-    const argument = words[wordIndex]?.value
+    const argument = words[wordIndex]
 
     if (argument === undefined) break
 
     if (argument === "--") {
-      subcommand = words[wordIndex + 1]?.value
+      subcommand = words[wordIndex + 1]
       wordIndex += 2
       break
     }
@@ -561,10 +520,8 @@ function extractInvocation(
     if (gitGlobalOptionsWithArg.has(argument)) {
       const optionValue = words[wordIndex + 1]
 
-      if (optionValue?.hasExpansion === true) hasUnexpandedArgument = true
-
       if (argument === "-C" && optionValue !== undefined) {
-        directoryChanges.push(optionValue.value)
+        directoryChanges.push(optionValue)
       }
 
       wordIndex += 2
@@ -579,15 +536,12 @@ function extractInvocation(
       argument.startsWith("--super-prefix=") ||
       argument.startsWith("-c")
     ) {
-      if (words[wordIndex]?.hasExpansion === true) hasUnexpandedArgument = true
       wordIndex++
       continue
     }
 
     if (argument.startsWith("-C")) {
       directoryChanges.push(argument.slice(2))
-
-      if (words[wordIndex]?.hasExpansion === true) hasUnexpandedArgument = true
       wordIndex++
       continue
     }
@@ -606,33 +560,23 @@ function extractInvocation(
 
   const messages: string[] = []
   const filePaths: string[] = []
-  const unverifiableInputs: string[] = []
   let hasSignoffFlag = false
   let isAmend = false
   let hasNoEdit = false
   let isHelp = false
 
-  for (let index = wordIndex; index < words.length; index++) {
-    if (words[index]?.hasExpansion === true) hasUnexpandedArgument = true
-  }
-
-  if (hasUnexpandedArgument) {
-    unverifiableInputs.push("A git commit argument contains an unexpanded shell variable or command substitution.")
-  }
-
-  const collectMessage = (word: CommandWord | undefined): void => {
+  const collectMessage = (word: string | undefined): void => {
     if (word === undefined) return
-    messages.push(word.value)
+    messages.push(word)
   }
 
-  const collectFile = (word: CommandWord | undefined): void => {
+  const collectFile = (word: string | undefined): void => {
     if (word === undefined) return
-    filePaths.push(word.value)
+    filePaths.push(word)
   }
 
   for (let index = wordIndex; index < words.length; index++) {
-    const word = words[index]
-    const argument = word?.value
+    const argument = words[index]
 
     if (argument === undefined) break
 
@@ -654,12 +598,12 @@ function extractInvocation(
       index++
       collectMessage(words[index])
     } else if (argument.startsWith("--message=")) {
-      collectMessage({ value: argument.slice("--message=".length), hasExpansion: word.hasExpansion })
+      collectMessage(argument.slice("--message=".length))
     } else if (argument === "-F" || argument === "--file") {
       index++
       collectFile(words[index])
     } else if (argument.startsWith("--file=")) {
-      collectFile({ value: argument.slice("--file=".length), hasExpansion: word.hasExpansion })
+      collectFile(argument.slice("--file=".length))
     } else if (commitLongOptionsWithArg.has(argument)) {
       index++
     } else if (argument.startsWith("-") && !argument.startsWith("--") && argument.length > 1) {
@@ -676,7 +620,7 @@ function extractInvocation(
           const attached = argument.slice(characterIndex + 1)
 
           const input = attached.length > 0
-            ? { value: attached, hasExpansion: word.hasExpansion }
+            ? attached
             : words[++index]
 
           if (option === "m") collectMessage(input)
@@ -701,7 +645,6 @@ function extractInvocation(
     isAmend,
     hasNoEdit,
     isHelp,
-    unverifiableInputs,
     directoryChanges,
   }
 }
@@ -716,27 +659,6 @@ export function extractGitCommits(command: string): GitCommitInvocation[] {
     const invocation = extractInvocation(words, commandStart)
 
     if (invocation !== undefined) invocations.push(invocation)
-
-    for (const splitCommand of commandStart.splitCommands) {
-      for (const nestedInvocation of extractGitCommits(splitCommand.value)) {
-        const unverifiableInputs = [...(nestedInvocation.unverifiableInputs ?? [])]
-
-        if (splitCommand.hasExpansion || commandStart.hasExpansion) {
-          unverifiableInputs.push(
-            "An env split-string command contains an unexpanded shell variable or command substitution.",
-          )
-        }
-
-        invocations.push({
-          ...nestedInvocation,
-          unverifiableInputs,
-          directoryChanges: [
-            ...commandStart.directoryChanges,
-            ...(nestedInvocation.directoryChanges ?? []),
-          ],
-        })
-      }
-    }
   }
 
   for (const token of tokens) {

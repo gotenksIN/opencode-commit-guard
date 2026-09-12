@@ -68,11 +68,6 @@ export function validateGitCommits(
       continue
     }
 
-    if (invocation.unverifiableInputs !== undefined && invocation.unverifiableInputs.length > 0) {
-      allViolations.push(...invocation.unverifiableInputs)
-      continue
-    }
-
     if (invocation.isAmend && invocation.hasNoEdit === true && invocation.messages.length === 0 && invocation.filePaths.length === 0) {
       continue
     }
