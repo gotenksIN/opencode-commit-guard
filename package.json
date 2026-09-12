@@ -32,5 +32,14 @@
   "engines": {
     "bun": ">=1.2.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "author": {
+    "name": "Omkar Chandorkar",
+    "email": "gotenksIN@aospa.co"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gotenksIN/opencode-commit-guard.git"
+  },
+  "homepage": "https://github.com/gotenksIN/opencode-commit-guard"
 }
