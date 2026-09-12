@@ -563,6 +563,7 @@ function extractInvocation(
   let hasSignoffFlag = false
   let isAmend = false
   let hasNoEdit = false
+  let isFixup = false
   let isHelp = false
 
   const collectMessage = (word: string | undefined): void => {
@@ -579,6 +580,9 @@ function extractInvocation(
     const argument = words[index]
 
     if (argument === undefined) break
+
+    const equalsIndex = argument.indexOf("=")
+    const longOptionName = equalsIndex > 0 ? argument.slice(0, equalsIndex) : argument
 
     if (argument === "--") break
 
@@ -604,8 +608,12 @@ function extractInvocation(
       collectFile(words[index])
     } else if (argument.startsWith("--file=")) {
       collectFile(argument.slice("--file=".length))
-    } else if (commitLongOptionsWithArg.has(argument)) {
-      index++
+    } else if (argument === "--fixup" || argument.startsWith("--fixup=")) {
+      isFixup = true
+
+      if (equalsIndex < 0) index++
+    } else if (commitLongOptionsWithArg.has(longOptionName)) {
+      if (equalsIndex < 0) index++
     } else if (argument.startsWith("-") && !argument.startsWith("--") && argument.length > 1) {
       for (let characterIndex = 1; characterIndex < argument.length; characterIndex++) {
         const option = argument[characterIndex]
@@ -644,6 +652,7 @@ function extractInvocation(
     hasSignoffFlag,
     isAmend,
     hasNoEdit,
+    isFixup,
     isHelp,
     directoryChanges,
   }

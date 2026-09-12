@@ -49,6 +49,7 @@ export interface GitCommitInvocation {
   readonly hasSignoffFlag: boolean
   readonly isAmend: boolean
   readonly hasNoEdit?: boolean
+  readonly isFixup?: boolean
   readonly isHelp: boolean
   readonly directoryChanges?: readonly string[]
 }

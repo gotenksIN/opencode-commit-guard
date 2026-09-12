@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process"
 import { closeSync, constants, existsSync, fstatSync, openSync, readSync, statSync } from "node:fs"
 import { resolve } from "node:path"
 import type {
@@ -68,15 +69,45 @@ export function validateGitCommits(
       continue
     }
 
-    if (invocation.isAmend && invocation.hasNoEdit === true && invocation.messages.length === 0 && invocation.filePaths.length === 0) {
-      continue
-    }
-
     const collectedMessages: string[] = [...invocation.messages]
     let messageDirectory = workingDirectory ?? process.cwd()
 
     for (const directoryChange of invocation.directoryChanges ?? []) {
       messageDirectory = resolve(messageDirectory, directoryChange)
+    }
+
+    if (
+      invocation.isAmend &&
+      invocation.hasNoEdit === true &&
+      invocation.messages.length === 0 &&
+      invocation.filePaths.length === 0
+    ) {
+      const result = spawnSync("git", ["log", "-1", "--format=%B", "HEAD"], {
+        cwd: messageDirectory,
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "pipe"],
+      })
+
+      if (result.error !== undefined) {
+        allViolations.push(`Failed to read the existing HEAD commit message: ${result.error.message}`)
+        continue
+      }
+
+      if (result.status !== 0) {
+        const detail = result.stderr.trim()
+        const suffix = detail.length > 0 ? `: ${detail}` : "."
+        allViolations.push(`Failed to read the existing HEAD commit message${suffix}`)
+        continue
+      }
+
+      const existingMessage = result.stdout.replace(/[\r\n]+$/, "")
+
+      if (existingMessage.trim().length === 0) {
+        allViolations.push("The existing HEAD commit message is empty.")
+        continue
+      }
+
+      collectedMessages.push(existingMessage)
     }
 
     const filePath = invocation.filePaths.at(-1)
@@ -136,6 +167,10 @@ export function validateGitCommits(
     }
 
     if (collectedMessages.length === 0) {
+      if (invocation.isFixup === true) {
+        continue
+      }
+
       if (invocation.filePaths.length === 0) {
         allViolations.push(
           'No commit message provided. Commits in OpenCode must provide a commit message via -m "<scope>: <subject>" or -F <file>.',
@@ -149,7 +184,8 @@ export function validateGitCommits(
     const lines = fullMessage.split(/\r?\n/)
     const firstLine = lines[0] ?? ""
     const subjectLine = firstLine.trim()
-    const scopeMatch = subjectLine.match(scopePattern)
+    const effectiveSubject = subjectLine.replace(/^(?:(?:fixup|squash)!\s+)+/, "")
+    const scopeMatch = effectiveSubject.match(scopePattern)
 
     if (
       scopeMatch?.[1] !== undefined &&
@@ -158,22 +194,28 @@ export function validateGitCommits(
     ) {
       const scopeViolation = validateAllowedScope(scopeMatch[1], config.allowedScopes)
 
-      if (scopeViolation !== undefined) allViolations.push(scopeViolation)
+      if (scopeViolation !== undefined) {
+        const fullSubjectDetail = effectiveSubject === subjectLine
+          ? ""
+          : ` Subject line: "${subjectLine}".`
+
+        allViolations.push(`${scopeViolation}${fullSubjectDetail}`)
+      }
     }
 
     if (config.requireScope) {
       if (subjectLine.length === 0) {
         allViolations.push('Subject line is empty. The commit message must begin with "<scope>: <subject>".')
       } else if (scopeMatch === null) {
-        if (/^:\s*/.test(subjectLine)) {
+        if (/^:\s*/.test(effectiveSubject)) {
           allViolations.push(
             `Missing scope before colon in subject line "${subjectLine}". Expected format: "<scope>: <subject>".`,
           )
-        } else if (/^[^:]+:\S/.test(subjectLine)) {
+        } else if (/^[^:]+:\S/.test(effectiveSubject)) {
           allViolations.push(
             `Missing space after colon in subject line "${subjectLine}". Expected format: "<scope>: <subject>".`,
           )
-        } else if (/^[^:]+:\s*$/.test(subjectLine)) {
+        } else if (/^[^:]+:\s*$/.test(effectiveSubject)) {
           allViolations.push(
             `Subject text after colon is empty in "${subjectLine}". Expected format: "<scope>: <subject>".`,
           )

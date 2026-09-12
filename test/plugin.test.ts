@@ -1,6 +1,15 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
+import { spawnSync } from "node:child_process"
+import { mkdirSync, rmSync } from "node:fs"
+import { join } from "node:path"
 import plugin from "../index.js"
 import type { JsonValue } from "../src/types.js"
+
+const testDir = join(import.meta.dir, ".plugin-tmp")
+
+afterEach(() => {
+  rmSync(testDir, { recursive: true, force: true })
+})
 
 interface HookEvent {
   tool: string
@@ -9,13 +18,13 @@ interface HookEvent {
 
 type ToolHookCallback = (event: HookEvent) => Promise<void>
 
-async function setupTestPlugin(options: JsonValue = {}) {
+async function setupTestPlugin(options: JsonValue = {}, directory = import.meta.dir) {
   const hooks = new Map<string, ToolHookCallback>()
 
   const ctx = {
     options,
     location: {
-      directory: import.meta.dir,
+      directory,
     },
     tool: {
       hook: async (name: string, callback: ToolHookCallback) => {
@@ -36,6 +45,34 @@ async function setupTestPlugin(options: JsonValue = {}) {
       }
     },
   }
+}
+
+function runGit(args: readonly string[]): void {
+  const result = spawnSync("git", args, {
+    cwd: testDir,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+  })
+
+  if (result.status !== 0) {
+    throw new Error(`Git test setup failed: ${result.stderr}`)
+  }
+}
+
+function initializeRepository(message: string): void {
+  mkdirSync(testDir, { recursive: true })
+  runGit(["init", "--quiet"])
+  runGit([
+    "-c",
+    "user.name=Test User",
+    "-c",
+    "user.email=test@example.com",
+    "commit",
+    "--allow-empty",
+    "--no-gpg-sign",
+    "-m",
+    message,
+  ])
 }
 
 describe("opencode-commit-guard plugin", () => {
@@ -71,6 +108,46 @@ describe("opencode-commit-guard plugin", () => {
     await expect(
       harness.executeBefore("bash", { command: 'git commit -sm "feat(parser): add subshell support"' }),
     ).resolves.toBeUndefined()
+  })
+
+  test("allows generated fixup commits without an explicit message", async () => {
+    const harness = await setupTestPlugin()
+    await expect(
+      harness.executeBefore("shell", { command: "git commit --fixup=HEAD" }),
+    ).resolves.toBeUndefined()
+  })
+
+  test("allows explicit fixup and squash subjects with valid scopes", async () => {
+    const harness = await setupTestPlugin()
+    await expect(
+      harness.executeBefore("shell", { command: 'git commit -s -m "fixup! kernel: fix race"' }),
+    ).resolves.toBeUndefined()
+    await expect(
+      harness.executeBefore("shell", { command: 'git commit -s -m "squash! feat(parser): add token"' }),
+    ).resolves.toBeUndefined()
+  })
+
+  test("rejects explicit fixup subjects with invalid scopes", async () => {
+    const harness = await setupTestPlugin()
+    await expect(
+      harness.executeBefore("shell", { command: 'git commit -s -m "fixup! invalid subject"' }),
+    ).rejects.toThrow('Missing scope in subject line "fixup! invalid subject"')
+  })
+
+  test("validates the existing commit for amend with no edit", async () => {
+    initializeRepository("kernel: valid existing message\n\nSigned-off-by: Test User <test@example.com>")
+    const harness = await setupTestPlugin({}, testDir)
+    await expect(
+      harness.executeBefore("shell", { command: "git commit --amend --no-edit" }),
+    ).resolves.toBeUndefined()
+  })
+
+  test("rejects amend with no edit when the existing commit is invalid", async () => {
+    initializeRepository("Invalid existing message\n\nSigned-off-by: Test User <test@example.com>")
+    const harness = await setupTestPlugin({}, testDir)
+    await expect(
+      harness.executeBefore("shell", { command: "git commit --amend --no-edit" }),
+    ).rejects.toThrow("Missing scope in subject line")
   })
 
   test("rejects git commit commands with invalid format before execution", async () => {

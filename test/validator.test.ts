@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { spawnSync } from "node:child_process"
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { defaultConfig } from "../src/types.js"
@@ -25,6 +26,34 @@ function invocation(
     isAmend,
     isHelp,
   }
+}
+
+function runGit(args: readonly string[]): void {
+  const result = spawnSync("git", args, {
+    cwd: testDir,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+  })
+
+  if (result.status !== 0) {
+    throw new Error(`Git test setup failed: ${result.stderr}`)
+  }
+}
+
+function initializeRepository(message: string): void {
+  mkdirSync(testDir, { recursive: true })
+  runGit(["init", "--quiet"])
+  runGit([
+    "-c",
+    "user.name=Test User",
+    "-c",
+    "user.email=test@example.com",
+    "commit",
+    "--allow-empty",
+    "--no-gpg-sign",
+    "-m",
+    message,
+  ])
 }
 
 describe("validator - scope rules", () => {
@@ -54,6 +83,38 @@ describe("validator - scope rules", () => {
 
     const inv2 = [invocation(["fix(ui): resolve button alignment issue"])]
     expect(() => validateGitCommits(inv2, defaultConfig, "git commit")).not.toThrow()
+  })
+
+  test("accepts chained fixup and squash prefixes with standard and conventional scopes", () => {
+    const subjects = [
+      "fixup! kernel: fix race",
+      "squash! releasetools: update ota",
+      "fixup! feat(parser): add token",
+      "fixup! squash! fix(ui): align button",
+      "fixup! fixup! build: update task",
+    ]
+
+    for (const subject of subjects) {
+      expect(() => validateGitCommits([invocation([subject])], defaultConfig, "git commit")).not.toThrow()
+    }
+  })
+
+  test("rejects invalid fixup and squash subjects while preserving the full subject", () => {
+    const invalidSubjects = [
+      ["fixup! bad subject", "Missing scope in subject line"],
+      ["squash! bad subject", "Missing scope in subject line"],
+      ["fixup! bad@: subject", "Missing scope in subject line"],
+      ["fixup! : empty scope", "Missing scope before colon"],
+      ["squash! kernel:no space", "Missing space after colon"],
+      ["fixup! kernel:", "Subject text after colon is empty"],
+    ]
+
+    for (const [subject, violation] of invalidSubjects) {
+      if (subject === undefined || violation === undefined) continue
+
+      expect(() => validateGitCommits([invocation([subject])], defaultConfig, "git commit")).toThrow(violation)
+      expect(() => validateGitCommits([invocation([subject])], defaultConfig, "git commit")).toThrow(subject)
+    }
   })
 
   test("rejects commit missing scope prefix", () => {
@@ -120,6 +181,26 @@ describe("validator - allowed scopes", () => {
     expect(() => validateGitCommits(inv, config, "git commit")).toThrow(
       'Scope "networking" is not in the allowed scopes list.',
     )
+  })
+
+  test("enforces allowedScopes for fixup and squash subjects", () => {
+    expect(() => validateGitCommits(
+      [invocation(["fixup! feat(parser): add token"])],
+      allowedConfig,
+      "git commit",
+    )).not.toThrow()
+
+    const subject = "squash! feat(networking): fix socket"
+    expect(() => validateGitCommits(
+      [invocation([subject])],
+      allowedConfig,
+      "git commit",
+    )).toThrow('Scope "feat(networking)" is not in the allowed scopes list')
+    expect(() => validateGitCommits(
+      [invocation([subject])],
+      allowedConfig,
+      "git commit",
+    )).toThrow(subject)
   })
 })
 
@@ -206,6 +287,19 @@ describe("validator - signoff requirement", () => {
     const config = { ...defaultConfig, requireSignoff: false }
     expect(() => validateGitCommits(inv, config, "git commit")).not.toThrow()
   })
+
+  test("enforces signoff requirements for explicit fixup and squash messages", () => {
+    expect(() => validateGitCommits(
+      [invocation(["fixup! kernel: fix race"], false)],
+      defaultConfig,
+      "git commit",
+    )).toThrow("Missing commit signoff")
+    expect(() => validateGitCommits(
+      [invocation(["squash! kernel: fix race"], false)],
+      defaultConfig,
+      "git commit",
+    )).toThrow("Missing commit signoff")
+  })
 })
 
 describe("validator - file inputs and amend commits", () => {
@@ -249,9 +343,54 @@ describe("validator - file inputs and amend commits", () => {
     )
   })
 
-  test("allows amend commits without new message", () => {
+  test("allows fixup commits without an explicit message", () => {
+    const inv = [{ ...invocation([], false), isFixup: true }]
+    expect(() => validateGitCommits(inv, defaultConfig, "git commit --fixup=HEAD")).not.toThrow()
+  })
+
+  test("validates the existing message for amend with no edit", () => {
+    initializeRepository("kernel: valid existing message\n\nSigned-off-by: Test User <test@example.com>")
     const inv = [{ ...invocation([], false, [], true), hasNoEdit: true }]
-    expect(() => validateGitCommits(inv, defaultConfig, "git commit --amend --no-edit")).not.toThrow()
+    expect(() => validateGitCommits(inv, defaultConfig, "git commit --amend --no-edit", testDir)).not.toThrow()
+  })
+
+  test("rejects amend with no edit when the existing scope is invalid", () => {
+    initializeRepository("Missing scope on existing commit\n\nSigned-off-by: Test User <test@example.com>")
+    const inv = [{ ...invocation([], false, [], true), hasNoEdit: true }]
+    expect(() => validateGitCommits(inv, defaultConfig, "git commit --amend --no-edit", testDir)).toThrow(
+      "Missing scope in subject line",
+    )
+  })
+
+  test("rejects amend with no edit when the existing message exceeds the line limit", () => {
+    initializeRepository(`kernel: ${"a".repeat(70)}\n\nSigned-off-by: Test User <test@example.com>`)
+    const inv = [{ ...invocation([], false, [], true), hasNoEdit: true }]
+    expect(() => validateGitCommits(inv, defaultConfig, "git commit --amend --no-edit", testDir)).toThrow(
+      "exceeds maximum line length",
+    )
+  })
+
+  test("enforces signoff options when amending with no edit", () => {
+    initializeRepository("kernel: existing message without signoff")
+    const unsigned = [{ ...invocation([], false, [], true), hasNoEdit: true }]
+    expect(() => validateGitCommits(unsigned, defaultConfig, "git commit --amend --no-edit", testDir)).toThrow(
+      "Missing commit signoff",
+    )
+
+    const signed = [{ ...invocation([], true, [], true), hasNoEdit: true }]
+    expect(() => validateGitCommits(signed, defaultConfig, "git commit --amend --no-edit -s", testDir)).not.toThrow()
+
+    const config = { ...defaultConfig, requireSignoff: false }
+    expect(() => validateGitCommits(unsigned, config, "git commit --amend --no-edit", testDir)).not.toThrow()
+  })
+
+  test("rejects amend with no edit when HEAD cannot be read", () => {
+    mkdirSync(testDir, { recursive: true })
+    runGit(["init", "--quiet"])
+    const inv = [{ ...invocation([], false, [], true), hasNoEdit: true }]
+    expect(() => validateGitCommits(inv, defaultConfig, "git commit --amend --no-edit", testDir)).toThrow(
+      "Failed to read the existing HEAD commit message",
+    )
   })
 
   test("validates amend commits when new message is provided", () => {

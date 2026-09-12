@@ -174,6 +174,36 @@ describe("extractGitCommits", () => {
     expect(amendWithMessage[0]?.messages).toEqual(["kernel: amended msg"])
   })
 
+  test("identifies fixup flag from separate and joined long options", () => {
+    const separate = extractGitCommits("git commit --fixup HEAD~2")
+    expect(separate[0]?.isFixup).toBe(true)
+
+    const joined = extractGitCommits("git commit --fixup=abc123")
+    expect(joined[0]?.isFixup).toBe(true)
+
+    const amend = extractGitCommits("git commit --fixup=amend:def456")
+    expect(amend[0]?.isFixup).toBe(true)
+  })
+
+  test("parses options following separate and joined squash flag", () => {
+    const separate = extractGitCommits('git commit --squash HEAD~3 -m "squash! scope: msg" -s')
+    expect(separate[0]?.messages).toEqual(["squash! scope: msg"])
+    expect(separate[0]?.hasSignoffFlag).toBe(true)
+
+    const joined = extractGitCommits('git commit --squash=def456 -m "squash! scope: msg" -s')
+    expect(joined[0]?.messages).toEqual(["squash! scope: msg"])
+    expect(joined[0]?.hasSignoffFlag).toBe(true)
+  })
+
+  test("continues parsing flags after long options with joined arguments", () => {
+    const invocations = extractGitCommits(
+      'git commit --author="Dev <dev@example.com>" --cleanup=strip --fixup=HEAD -s',
+    )
+
+    expect(invocations[0]?.isFixup).toBe(true)
+    expect(invocations[0]?.hasSignoffFlag).toBe(true)
+  })
+
   test("identifies git commit after leading environment variables", () => {
     const invocations = extractGitCommits('GIT_AUTHOR_NAME="Alice" git commit -m "build: fix" -s')
     expect(invocations).toHaveLength(1)
