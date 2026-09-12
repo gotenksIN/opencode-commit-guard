@@ -2,6 +2,12 @@
 
 All notable changes to `opencode-commit-guard` are documented in this file.
 
+## 1.0.1 (2026-09-12)
+
+- Accept `git commit --fixup=<commit>` without requiring `-m` or `-F`.
+- Allow `fixup!` and `squash!` prefixes on commit subjects while checking the underlying scope.
+- Support `git commit --amend --no-edit` by validating the existing `HEAD` commit message.
+
 ## 1.0.0 (2026-09-12)
 
 - Initial release of `opencode-commit-guard` for OpenCode V2.
