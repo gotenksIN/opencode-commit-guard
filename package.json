@@ -1,0 +1,36 @@
+{
+  "name": "opencode-commit-guard",
+  "version": "1.0.0",
+  "description": "OpenCode V2 plugin enforcing git commit format rules",
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./source": "./index.ts"
+  },
+  "files": [
+    "dist",
+    "index.ts",
+    "src"
+  ],
+  "scripts": {
+    "lint": "oxlint .",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "build": "bun build index.ts --outdir dist --target bun --format esm --external @opencode/plugin",
+    "prepack": "bun run build"
+  },
+  "dependencies": {
+    "@opencode/plugin": "2.0.2"
+  },
+  "devDependencies": {
+    "@oxlint/plugins": "1.80.0",
+    "@types/bun": "latest",
+    "oxlint": "1.80.0",
+    "typescript": "latest"
+  },
+  "engines": {
+    "bun": ">=1.2.0"
+  },
+  "license": "MIT"
+}
