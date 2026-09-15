@@ -3,7 +3,7 @@ import { parseConfig } from "./config.js"
 import { extractGitCommits } from "./shell.js"
 import { isJSONString, isRecord } from "./types.js"
 import type { JsonValue } from "./types.js"
-import { validateGitCommits } from "./validator.js"
+import { resolveLocationPath, validateGitCommits } from "./validator.js"
 
 export const plugin = Plugin.define({
   id: "opencode-commit-guard",
@@ -41,7 +41,9 @@ export const plugin = Plugin.define({
         invocations,
         config,
         command,
-        isJSONString(workdir) ? workdir : sessionDirectory,
+        isJSONString(workdir)
+          ? resolveLocationPath(sessionDirectory, workdir)
+          : sessionDirectory,
       )
     })
   },

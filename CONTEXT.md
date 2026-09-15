@@ -129,6 +129,7 @@ The plugin (`src/plugin.ts`) wires the validation engine to OpenCode's tool exec
 - Hook: `ctx.tool.hook("execute.before")`.
 - Checks if `event.tool` is `"shell"` or `"bash"`.
 - Extracts `command` from `event.input`.
+- Resolves a relative shell `workdir` from the session directory, expands `~`, and normalizes Windows shell paths with OpenCode-compatible rules.
 - Returns immediately if the command does not contain `"commit"`.
 - Runs `extractGitCommits(command)` and validates all found invocations.
 - Throwing an Error inside `execute.before` aborts tool execution and displays the error prompt to the agent.

@@ -9,6 +9,7 @@ const testDir = join(import.meta.dir, ".plugin-tmp")
 
 afterEach(() => {
   rmSync(testDir, { recursive: true, force: true })
+  delete process.env.OPENCODE_TEST_HOME
 })
 
 interface HookEvent {
@@ -47,9 +48,9 @@ async function setupTestPlugin(options: JsonValue = {}, directory = import.meta.
   }
 }
 
-function runGit(args: readonly string[]): void {
+function runGit(args: readonly string[], directory = testDir): void {
   const result = spawnSync("git", args, {
-    cwd: testDir,
+    cwd: directory,
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "pipe"],
   })
@@ -59,9 +60,9 @@ function runGit(args: readonly string[]): void {
   }
 }
 
-function initializeRepository(message: string): void {
-  mkdirSync(testDir, { recursive: true })
-  runGit(["init", "--quiet"])
+function initializeRepository(message: string, directory = testDir): void {
+  mkdirSync(directory, { recursive: true })
+  runGit(["init", "--quiet"], directory)
   runGit([
     "-c",
     "user.name=Test User",
@@ -72,7 +73,7 @@ function initializeRepository(message: string): void {
     "--no-gpg-sign",
     "-m",
     message,
-  ])
+  ], directory)
 }
 
 describe("opencode-commit-guard plugin", () => {
@@ -148,6 +149,33 @@ describe("opencode-commit-guard plugin", () => {
     await expect(
       harness.executeBefore("shell", { command: "git commit --amend --no-edit" }),
     ).rejects.toThrow("Missing scope in subject line")
+  })
+
+  test("resolves a relative shell workdir from the session directory", async () => {
+    const sessionDirectory = join(testDir, "session")
+    const repositoryDirectory = join(sessionDirectory, "nested")
+    initializeRepository("kernel: valid existing message\n\nSigned-off-by: Test User <test@example.com>", repositoryDirectory)
+    const harness = await setupTestPlugin({}, sessionDirectory)
+
+    await expect(
+      harness.executeBefore("shell", {
+        command: "git commit --amend --no-edit",
+        workdir: "nested",
+      }),
+    ).resolves.toBeUndefined()
+  })
+
+  test("expands a home shell workdir like OpenCode", async () => {
+    process.env.OPENCODE_TEST_HOME = testDir
+    initializeRepository("kernel: valid existing message\n\nSigned-off-by: Test User <test@example.com>")
+    const harness = await setupTestPlugin({}, join(testDir, "session"))
+
+    await expect(
+      harness.executeBefore("shell", {
+        command: "git commit --amend --no-edit",
+        workdir: "~",
+      }),
+    ).resolves.toBeUndefined()
   })
 
   test("rejects git commit commands with invalid format before execution", async () => {

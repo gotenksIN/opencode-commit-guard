@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process"
-import { resolve } from "node:path"
+import { homedir } from "node:os"
+import { join, resolve } from "node:path"
 import type {
   CommitGuardConfig,
   GitCommitInvocation,
@@ -9,6 +10,44 @@ import type {
 const scopePattern = /^([a-zA-Z0-9_\-./]+(?:\([a-zA-Z0-9_\-./]+\))?):\s+(.+)$/
 
 const signoffPattern = /^\s*Signed-off-by:\s+[^<>\r\n]+\s+<[^<>\r\n@]+@[^<>\r\n@]+>\s*$/i
+
+function normalizeWindowsShellPath(inputPath: string): string {
+  if (process.platform !== "win32") return inputPath
+
+  const patterns = [
+    /^\/([a-zA-Z]):(?:[\\/]|$)/,
+    /^\/([a-zA-Z])(?:\/|$)/,
+    /^\/cygdrive\/([a-zA-Z])(?:\/|$)/,
+    /^\/mnt\/([a-zA-Z])(?:\/|$)/,
+  ]
+
+  for (const pattern of patterns) {
+    const match = inputPath.match(pattern)
+    const drive = match?.[1]
+
+    if (match?.[0] !== undefined && drive !== undefined) {
+      return `${drive.toUpperCase()}:/${inputPath.slice(match[0].length)}`
+    }
+  }
+
+  return inputPath
+}
+
+export function resolveLocationPath(baseDirectory: string, inputPath: string): string {
+  const homeDirectory = process.env.OPENCODE_TEST_HOME ?? homedir()
+  const normalizedInput = normalizeWindowsShellPath(inputPath)
+
+  if (normalizedInput === "~") return homeDirectory
+
+  if (
+    normalizedInput.startsWith("~/") ||
+    (process.platform === "win32" && normalizedInput.startsWith("~\\"))
+  ) {
+    return join(homeDirectory, normalizedInput.slice(2))
+  }
+
+  return resolve(baseDirectory, normalizedInput)
+}
 
 function hasSignoffTrailer(lines: readonly string[]): boolean {
   const subjectIndex = lines.findIndex((line) => line.trim().length > 0)
@@ -70,7 +109,7 @@ export function validateGitCommits(
     let messageDirectory = workingDirectory ?? process.cwd()
 
     for (const directoryChange of invocation.directoryChanges ?? []) {
-      messageDirectory = resolve(messageDirectory, directoryChange)
+      messageDirectory = resolveLocationPath(messageDirectory, directoryChange)
     }
 
     if (
