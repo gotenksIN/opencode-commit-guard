@@ -1,4 +1,6 @@
-import { Plugin } from "@opencode/plugin"
+import { Plugin } from "@opencode/plugin/effect"
+import { Tool } from "@opencode/schema/tool"
+import { Effect } from "effect"
 import { parseConfig } from "./config.js"
 import { extractGitCommits } from "./shell.js"
 import { isJSONString, isRecord } from "./types.js"
@@ -7,48 +9,62 @@ import { resolveLocationPath, validateGitCommits } from "./validator.js"
 
 export const plugin = Plugin.define({
   id: "opencode-commit-guard",
-  setup: async (ctx) => {
-    // SAFETY: OpenCode plugin options are passed through ctx.options as JsonValue or undefined.
-    const config = parseConfig(ctx.options as JsonValue | undefined)
+  effect: (ctx) => Effect.gen(function*() {
+    const config = yield* Effect.sync(() => {
+      // SAFETY: OpenCode plugin options are passed through ctx.options as JsonValue or undefined.
+      return parseConfig(ctx.options as JsonValue | undefined)
+    })
+
     const sessionDirectory = ctx.location.directory
     const canReadLocalRepository = ctx.location.workspaceID === undefined
 
-    await ctx.tool.hook("execute.before", async (event) => {
-      if (event.tool !== "shell" && event.tool !== "bash") {
-        return
-      }
+    yield* ctx.tool.hook("execute.before", (event) => Effect.try({
+      try: () => {
+        if (event.tool !== "shell" && event.tool !== "bash") {
+          return
+        }
 
-      // SAFETY: event.input is an unvalidated tool input payload from OpenCode runtime.
-      const rawInput = event.input as JsonValue | undefined
+        // SAFETY: event.input is an unvalidated tool input payload from OpenCode runtime.
+        const rawInput = event.input as JsonValue | undefined
 
-      if (!isRecord(rawInput)) {
-        return
-      }
+        if (!isRecord(rawInput)) {
+          return
+        }
 
-      const command = rawInput["command"]
+        const command = rawInput["command"]
 
-      if (!isJSONString(command)) {
-        return
-      }
+        if (!isJSONString(command)) {
+          return
+        }
 
-      const invocations = extractGitCommits(command)
+        if (!command.includes("commit")) {
+          return
+        }
 
-      if (invocations.length === 0) {
-        return
-      }
+        const invocations = extractGitCommits(command)
 
-      const workdir = rawInput["workdir"]
-      validateGitCommits(
-        invocations,
-        config,
-        command,
-        isJSONString(workdir)
-          ? resolveLocationPath(sessionDirectory, workdir)
-          : sessionDirectory,
-        canReadLocalRepository,
-      )
-    })
-  },
+        if (invocations.length === 0) {
+          return
+        }
+
+        const workdir = rawInput["workdir"]
+        validateGitCommits(
+          invocations,
+          config,
+          command,
+          isJSONString(workdir)
+            ? resolveLocationPath(sessionDirectory, workdir)
+            : sessionDirectory,
+          canReadLocalRepository,
+        )
+      },
+      catch: (error) => new Tool.Error({
+        message: error instanceof Error
+          ? error.message
+          : "[commit-guard] Git commit validation failed.",
+      }),
+    }))
+  }),
 })
 
 export default plugin

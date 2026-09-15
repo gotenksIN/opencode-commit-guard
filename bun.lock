@@ -6,6 +6,8 @@
       "name": "opencode-commit-guard",
       "dependencies": {
         "@opencode/plugin": "2.0.3",
+        "@opencode/schema": "2.0.3",
+        "effect": "4.0.0-rc.112",
       },
       "devDependencies": {
         "@oxlint/plugins": "1.83.0",

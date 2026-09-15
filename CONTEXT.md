@@ -131,18 +131,19 @@ When violations occur, the engine throws an Error with:
 
 The plugin (`src/plugin.ts`) wires the validation engine to OpenCode's tool execution lifecycle:
 
-- Hook: `ctx.tool.hook("execute.before")`.
+- Entrypoint: `Plugin.define` from `@opencode/plugin/effect`.
+- Hook: `ctx.tool.hook("execute.before")` with an Effect callback.
 - Checks if `event.tool` is `"shell"` or `"bash"`.
 - Extracts `command` from `event.input`.
 - Resolves a relative shell `workdir` from the session directory, expands `~`, and normalizes Windows shell paths with OpenCode-compatible rules.
 - Uses `location.workspaceID` to prevent local host reads for repositories that execute in remote workspaces.
 - Returns immediately if the command does not contain `"commit"`.
 - Runs `extractGitCommits(command)` and validates all found invocations.
-- Throwing an Error inside `execute.before` aborts tool execution and displays the error prompt to the agent.
+- Validation failures use the typed `Tool.Error` failure channel so parallel calls settle independently without becoming Effect defects.
 
 ## Packaging and runtime invariants
 
 - Package uses ECMAScript Modules (`"type": "module"`).
-- Dependency on `@opencode/plugin: 2.0.2` declared under `dependencies`.
-- Standalone ESM distribution bundle created with `bun build index.ts --outdir dist --target bun --format esm --external @opencode/plugin`.
+- Dependencies on `@opencode/plugin`, `@opencode/schema`, and `effect` are declared under `dependencies`.
+- The ESM distribution bundle keeps OpenCode and Effect runtime packages external so it uses the host's typed failure classes and Effect runtime.
 - Oxlint enforces custom anti-slop rules including `require-safety-comment-for-type-assertion` and `no-runtime-typeof`.

@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { Tool } from "@opencode/schema/tool"
+import { Effect } from "effect"
 import { spawnSync } from "node:child_process"
 import { mkdirSync, rmSync } from "node:fs"
 import { join } from "node:path"
@@ -17,7 +19,7 @@ interface HookEvent {
   input: JsonValue
 }
 
-type ToolHookCallback = (event: HookEvent) => Promise<void>
+type ToolHookCallback = (event: HookEvent) => Effect.Effect<void, Tool.Error>
 
 async function setupTestPlugin(
   options: JsonValue = {},
@@ -33,21 +35,23 @@ async function setupTestPlugin(
       workspaceID,
     },
     tool: {
-      hook: async (name: string, callback: ToolHookCallback) => {
+      hook: (name: string, callback: ToolHookCallback) => Effect.sync(() => {
         hooks.set(name, callback)
-      },
+
+        return { dispose: Effect.void }
+      }),
     },
   }
 
-  // SAFETY: ctx stubs the options and tool domain required by the plugin setup.
-  await plugin.setup(ctx as never)
+  // SAFETY: ctx stubs the options and tool domain required by the plugin effect.
+  await Effect.runPromise(Effect.scoped(plugin.effect(ctx as never)))
 
   return {
     executeBefore: async (tool: string, input: JsonValue) => {
       const hook = hooks.get("execute.before")
 
       if (hook !== undefined) {
-        await hook({ tool, input })
+        await Effect.runPromise(hook({ tool, input }))
       }
     },
   }
@@ -215,6 +219,27 @@ describe("opencode-commit-guard plugin", () => {
     ).rejects.toThrow("Missing scope in subject line")
   })
 
+  test("settles parallel validation failures as independent tool errors", async () => {
+    const harness = await setupTestPlugin()
+
+    const settled = await Promise.allSettled([
+      harness.executeBefore("shell", { command: 'git commit -s -m "invalid scope"' }),
+      harness.executeBefore("shell", { command: 'git commit -m "kernel: missing signoff"' }),
+    ])
+
+    const scopeFailure = settled[0]
+    const signoffFailure = settled[1]
+
+    expect(scopeFailure?.status).toBe("rejected")
+    expect(signoffFailure?.status).toBe("rejected")
+
+    if (scopeFailure?.status === "rejected" && signoffFailure?.status === "rejected") {
+      expect(scopeFailure.reason).toBeInstanceOf(Tool.Error)
+      expect(signoffFailure.reason).toBeInstanceOf(Tool.Error)
+      expect(scopeFailure.reason.message).toContain("Missing scope in subject line")
+      expect(signoffFailure.reason.message).toContain("Missing commit signoff")
+    }
+  })
   test("rejects git commit commands missing signoff flag or trailer", async () => {
     const harness = await setupTestPlugin()
     await expect(
