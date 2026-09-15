@@ -303,44 +303,23 @@ describe("validator - signoff requirement", () => {
 })
 
 describe("validator - file inputs and amend commits", () => {
-  test("reads valid commit message from file", () => {
+  test("rejects message files without disclosing their content", () => {
     mkdirSync(testDir, { recursive: true })
     const filePath = join(testDir, "commit_msg.txt")
-    writeFileSync(filePath, "kernel: valid message from file\n\nExplanation of change.")
+    const secret = "private message content"
+    writeFileSync(filePath, secret)
     const inv = [invocation([], true, [filePath])]
-    expect(() => validateGitCommits(inv, defaultConfig, "git commit -F ...", testDir)).not.toThrow()
-  })
+    let caught: Error | undefined
 
-  test("resolves a relative message file against the working directory", () => {
-    mkdirSync(testDir, { recursive: true })
-    writeFileSync(join(testDir, "commit_msg.txt"), "kernel: valid relative file")
-    const inv = [invocation([], true, ["commit_msg.txt"])]
-    expect(() => validateGitCommits(inv, defaultConfig, "git commit -F commit_msg.txt", testDir)).not.toThrow()
-  })
+    try {
+      validateGitCommits(inv, defaultConfig, "git commit -F ...", testDir)
+    } catch (error) {
+      if (error instanceof Error) caught = error
+    }
 
-  test("applies git -C changes before resolving a relative message file", () => {
-    const nestedDirectory = join(testDir, "nested")
-    mkdirSync(nestedDirectory, { recursive: true })
-    writeFileSync(join(nestedDirectory, "commit_msg.txt"), "kernel: valid nested file")
-    const inv = [{ ...invocation([], true, ["commit_msg.txt"]), directoryChanges: ["nested"] }]
-    expect(() => validateGitCommits(inv, defaultConfig, "git -C nested commit -F commit_msg.txt", testDir)).not.toThrow()
-  })
-
-  test("validates only the last repeated message file", () => {
-    mkdirSync(testDir, { recursive: true })
-    writeFileSync(join(testDir, "first.txt"), "kernel: valid first file")
-    writeFileSync(join(testDir, "last.txt"), "invalid last file")
-    const inv = [invocation([], true, ["first.txt", "last.txt"])]
-    expect(() => validateGitCommits(inv, defaultConfig, "git commit -F first.txt -F last.txt", testDir)).toThrow(
-      'Missing scope in subject line "invalid last file"',
-    )
-  })
-
-  test("rejects when commit message file does not exist", () => {
-    const inv = [invocation([], true, ["nonexistent_file.txt"])]
-    expect(() => validateGitCommits(inv, defaultConfig, "git commit -F ...", testDir)).toThrow(
-      'Commit message file "nonexistent_file.txt" does not exist.',
-    )
+    expect(caught?.message).toContain("Cannot validate a commit message from file")
+    expect(caught?.message).toContain('git commit -s -m "kernel: add support for foo"')
+    expect(caught?.message).not.toContain(secret)
   })
 
   test("allows fixup commits without an explicit message", () => {

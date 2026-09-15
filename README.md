@@ -5,7 +5,7 @@ OpenCode V2 plugin that enforces git commit message format rules during agent se
 ## Overview
 
 `opencode-commit-guard` intercepts `shell` and `bash` tool execution before it runs.
-When an agent attempts a `git commit`, the plugin inspects the command line, message flags, and message content.
+When an agent attempts a `git commit`, the plugin inspects the command line and inline message content.
 If the commit violates configured formatting standards, the plugin rejects the tool call immediately by throwing a descriptive error.
 
 ### Why this approach fits
@@ -96,6 +96,11 @@ You can provide this either via flags or directly in the message body:
 
 If an agent runs `git commit --amend --no-edit` without supplying a new message, the plugin permits execution.
 If the agent provides a new message with `-m`, the plugin validates the new message.
+
+### Message input
+
+Provide commit messages inline with `-m` or `--message`.
+The plugin rejects `-F`, `--file`, and standard-input message sources because the pre-execution hook cannot read them through OpenCode's file permissions.
 
 ## Development
 

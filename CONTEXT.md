@@ -95,8 +95,8 @@ The validation engine (`src/validator.ts`) enforces commit format invariants.
 ### 1. Message assembly
 
 - If multiple `-m` options are given, their values are joined with double newlines (`\n\n`) as separate paragraphs.
-- File references (`-F <file>`) are resolved against the current working directory and read synchronously.
-- If a referenced file does not exist, a violation is added.
+- File and standard-input references (`-F <file>`, `--file`) are rejected before shell execution.
+- The plugin never reads `-F` or `--file` message files because the pre-execution hook has no permission-checked file access boundary.
 - If no message is provided and `--amend` is not present, the invocation is rejected.
 - If `--amend` is present with no new message (`git commit --amend --no-edit`), validation passes.
 

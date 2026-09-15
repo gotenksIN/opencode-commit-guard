@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process"
-import { closeSync, constants, existsSync, fstatSync, openSync, readSync, statSync } from "node:fs"
 import { resolve } from "node:path"
 import type {
   CommitGuardConfig,
@@ -10,8 +9,6 @@ import type {
 const scopePattern = /^([a-zA-Z0-9_\-./]+(?:\([a-zA-Z0-9_\-./]+\))?):\s+(.+)$/
 
 const signoffPattern = /^\s*Signed-off-by:\s+[^<>\r\n]+\s+<[^<>\r\n@]+@[^<>\r\n@]+>\s*$/i
-
-const maxMessageFileSize = 64 * 1024
 
 function hasSignoffTrailer(lines: readonly string[]): boolean {
   const subjectIndex = lines.findIndex((line) => line.trim().length > 0)
@@ -113,57 +110,10 @@ export function validateGitCommits(
     const filePath = invocation.filePaths.at(-1)
 
     if (filePath !== undefined) {
-      if (filePath === "-") {
-        allViolations.push("Cannot validate a commit message read from standard input. Use -m or a regular message file.")
-        continue
-      }
-
-      const fullPath = resolve(messageDirectory, filePath)
-
-      if (!existsSync(fullPath)) {
-        allViolations.push(`Commit message file "${filePath}" does not exist.`)
-        continue
-      }
-
-      try {
-        const fileInfo = statSync(fullPath)
-
-        if (!fileInfo.isFile()) {
-          allViolations.push(`Commit message path "${filePath}" is not a regular file.`)
-          continue
-        }
-
-        if (fileInfo.size > maxMessageFileSize) {
-          allViolations.push(`Commit message file "${filePath}" exceeds the 64 KB size limit.`)
-          continue
-        }
-
-        const descriptor = openSync(fullPath, constants.O_RDONLY | constants.O_NONBLOCK)
-
-        try {
-          const openedFileInfo = fstatSync(descriptor)
-
-          if (!openedFileInfo.isFile()) {
-            allViolations.push(`Commit message path "${filePath}" is not a regular file.`)
-            continue
-          }
-
-          const fileContent = Buffer.alloc(maxMessageFileSize + 1)
-          const bytesRead = readSync(descriptor, fileContent, 0, fileContent.length, 0)
-
-          if (bytesRead > maxMessageFileSize) {
-            allViolations.push(`Commit message file "${filePath}" exceeds the 64 KB size limit.`)
-            continue
-          }
-
-          collectedMessages.push(fileContent.toString("utf-8", 0, bytesRead))
-        } finally {
-          closeSync(descriptor)
-        }
-      } catch (readError) {
-        const errorDetail = readError instanceof Error ? readError.message : "Cannot read file"
-        allViolations.push(`Failed to read commit message file "${filePath}": ${errorDetail}`)
-      }
+      allViolations.push(
+        `Cannot validate a commit message from ${filePath === "-" ? "standard input" : `file "${filePath}"`} before shell permissions run. Use an inline message, for example: git commit -s -m "kernel: add support for foo".`,
+      )
+      continue
     }
 
     if (collectedMessages.length === 0) {
@@ -173,7 +123,7 @@ export function validateGitCommits(
 
       if (invocation.filePaths.length === 0) {
         allViolations.push(
-          'No commit message provided. Commits in OpenCode must provide a commit message via -m "<scope>: <subject>" or -F <file>.',
+          'No commit message provided. Commits in OpenCode must provide an inline message via -m "<scope>: <subject>".',
         )
       }
 
