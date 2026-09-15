@@ -2,6 +2,15 @@
 
 All notable changes to `opencode-commit-guard` are documented in this file.
 
+## 1.0.2 (2026-09-15)
+
+- Update OpenCode V2 and Oxlint dependencies.
+- Reject file-based commit messages before execution to prevent unauthorized host file reads.
+- Resolve relative, home, and Windows shell working directories consistently with OpenCode.
+- Reject unsafe repository selectors and ambiguous home directory changes for no-edit amendments.
+- Reject local repository reads for no-edit amendments in workspace-backed sessions.
+- Return validation failures through OpenCode's typed tool-error channel.
+
 ## 1.0.1 (2026-09-12)
 
 - Accept `git commit --fixup=<commit>` without requiring `-m` or `-F`.
