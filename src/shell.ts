@@ -503,6 +503,8 @@ function extractInvocation(
   if (executable === undefined || (executable !== "git" && !executable.endsWith("/git"))) return undefined
   wordIndex++
   const directoryChanges = [...commandStart.directoryChanges]
+  let gitDir: string | undefined
+  let workTree: string | undefined
 
   let subcommand: string | undefined
 
@@ -522,15 +524,29 @@ function extractInvocation(
 
       if (argument === "-C" && optionValue !== undefined) {
         directoryChanges.push(optionValue)
+      } else if (argument === "--git-dir" && optionValue !== undefined) {
+        gitDir = optionValue
+      } else if (argument === "--work-tree" && optionValue !== undefined) {
+        workTree = optionValue
       }
 
       wordIndex += 2
       continue
     }
 
+    if (argument.startsWith("--git-dir=")) {
+      gitDir = argument.slice("--git-dir=".length)
+      wordIndex++
+      continue
+    }
+
+    if (argument.startsWith("--work-tree=")) {
+      workTree = argument.slice("--work-tree=".length)
+      wordIndex++
+      continue
+    }
+
     if (
-      argument.startsWith("--git-dir=") ||
-      argument.startsWith("--work-tree=") ||
       argument.startsWith("--namespace=") ||
       argument.startsWith("--exec-path=") ||
       argument.startsWith("--super-prefix=") ||
@@ -655,6 +671,8 @@ function extractInvocation(
     isFixup,
     isHelp,
     directoryChanges,
+    gitDir,
+    workTree,
   }
 }
 

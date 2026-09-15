@@ -52,6 +52,8 @@ export interface GitCommitInvocation {
   readonly isFixup?: boolean
   readonly isHelp: boolean
   readonly directoryChanges?: readonly string[]
+  readonly gitDir?: string
+  readonly workTree?: string
 }
 
 export interface OverlongLine {

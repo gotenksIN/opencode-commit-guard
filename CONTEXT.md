@@ -32,6 +32,8 @@ export interface GitCommitInvocation {
   readonly hasSignoffFlag: boolean
   readonly isAmend: boolean
   readonly isHelp: boolean
+  readonly gitDir?: string
+  readonly workTree?: string
 }
 ```
 
@@ -40,6 +42,7 @@ export interface GitCommitInvocation {
 - `hasSignoffFlag`: `true` when `-s` or `--signoff` was passed; `false` when omitted or explicitly overridden by `--no-signoff`.
 - `isAmend`: `true` when `--amend` was passed.
 - `isHelp`: `true` when `-h` or `--help` was passed.
+- `gitDir` and `workTree`: Preserve explicit repository selectors so validation can reject unsafe external HEAD lookups.
 
 ### Diagnostics
 
@@ -99,6 +102,7 @@ The validation engine (`src/validator.ts`) enforces commit format invariants.
 - The plugin never reads `-F` or `--file` message files because the pre-execution hook has no permission-checked file access boundary.
 - If no message is provided and `--amend` is not present, the invocation is rejected.
 - If `--amend` is present with no new message (`git commit --amend --no-edit`), validation passes.
+- No-edit amendments with `--git-dir` or `--work-tree` are rejected unless they provide an inline message.
 
 ### 2. Rule evaluation
 

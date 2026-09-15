@@ -118,6 +118,13 @@ export function validateGitCommits(
       invocation.messages.length === 0 &&
       invocation.filePaths.length === 0
     ) {
+      if (invocation.gitDir !== undefined || invocation.workTree !== undefined) {
+        allViolations.push(
+          'Cannot validate an existing commit through --git-dir or --work-tree before shell permissions run. Provide an explicit inline message, for example: git commit --amend -s -m "kernel: fix race".',
+        )
+        continue
+      }
+
       const result = spawnSync("git", ["log", "-1", "--format=%B", "HEAD"], {
         cwd: messageDirectory,
         encoding: "utf-8",

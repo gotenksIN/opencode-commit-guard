@@ -151,6 +151,16 @@ describe("opencode-commit-guard plugin", () => {
     ).rejects.toThrow("Missing scope in subject line")
   })
 
+  test("rejects no-edit amendments with explicit repository selectors", async () => {
+    const harness = await setupTestPlugin()
+
+    await expect(
+      harness.executeBefore("shell", {
+        command: "git --git-dir ../outside.git --work-tree ../outside commit --amend --no-edit",
+      }),
+    ).rejects.toThrow("Cannot validate an existing commit through --git-dir or --work-tree")
+  })
+
   test("resolves a relative shell workdir from the session directory", async () => {
     const sessionDirectory = join(testDir, "session")
     const repositoryDirectory = join(sessionDirectory, "nested")
