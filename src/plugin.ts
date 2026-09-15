@@ -11,6 +11,7 @@ export const plugin = Plugin.define({
     // SAFETY: OpenCode plugin options are passed through ctx.options as JsonValue or undefined.
     const config = parseConfig(ctx.options as JsonValue | undefined)
     const sessionDirectory = ctx.location.directory
+    const canReadLocalRepository = ctx.location.workspaceID === undefined
 
     await ctx.tool.hook("execute.before", async (event) => {
       if (event.tool !== "shell" && event.tool !== "bash") {
@@ -44,6 +45,7 @@ export const plugin = Plugin.define({
         isJSONString(workdir)
           ? resolveLocationPath(sessionDirectory, workdir)
           : sessionDirectory,
+        canReadLocalRepository,
       )
     })
   },

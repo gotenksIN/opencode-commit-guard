@@ -19,13 +19,18 @@ interface HookEvent {
 
 type ToolHookCallback = (event: HookEvent) => Promise<void>
 
-async function setupTestPlugin(options: JsonValue = {}, directory = import.meta.dir) {
+async function setupTestPlugin(
+  options: JsonValue = {},
+  directory = import.meta.dir,
+  workspaceID?: string,
+) {
   const hooks = new Map<string, ToolHookCallback>()
 
   const ctx = {
     options,
     location: {
       directory,
+      workspaceID,
     },
     tool: {
       hook: async (name: string, callback: ToolHookCallback) => {
@@ -159,6 +164,21 @@ describe("opencode-commit-guard plugin", () => {
         command: "git --git-dir ../outside.git --work-tree ../outside commit --amend --no-edit",
       }),
     ).rejects.toThrow("Cannot validate an existing commit through --git-dir or --work-tree")
+  })
+
+  test("avoids local repository reads for workspace-backed locations", async () => {
+    initializeRepository("Invalid local host message")
+    const harness = await setupTestPlugin({}, testDir, "workspace-1")
+
+    await expect(
+      harness.executeBefore("shell", { command: "git commit --amend --no-edit" }),
+    ).rejects.toThrow("Cannot validate the existing commit in a workspace-backed location")
+    await expect(
+      harness.executeBefore("shell", { command: 'git commit --amend -s -m "kernel: valid remote message"' }),
+    ).resolves.toBeUndefined()
+    await expect(
+      harness.executeBefore("shell", { command: 'git commit --amend -s -m "invalid remote message"' }),
+    ).rejects.toThrow("Missing scope in subject line")
   })
 
   test("resolves a relative shell workdir from the session directory", async () => {

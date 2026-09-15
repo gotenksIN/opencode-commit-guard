@@ -97,6 +97,7 @@ You can provide this either via flags or directly in the message body:
 If an agent runs `git commit --amend --no-edit` without supplying a new message, the plugin permits execution.
 If the agent provides a new message with `-m`, the plugin validates the new message.
 No-edit amendments that use `--git-dir` or `--work-tree` must provide a new inline message because the plugin cannot inspect repositories selected outside OpenCode's shell permissions.
+In workspace-backed sessions, no-edit amendments must also provide a new inline message because the repository exists in the remote workspace, not on the plugin host.
 
 ### Message input
 

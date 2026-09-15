@@ -388,6 +388,18 @@ describe("validator - file inputs and amend commits", () => {
     )
   })
 
+  test("rejects external reads for workspace-backed validation", () => {
+    const inv = [{ ...invocation([], false, [], true), hasNoEdit: true }]
+
+    expect(() => validateGitCommits(
+      inv,
+      defaultConfig,
+      "git commit --amend --no-edit",
+      testDir,
+      false,
+    )).toThrow("Cannot validate the existing commit in a workspace-backed location")
+  })
+
   test("validates amend commits when new message is provided", () => {
     const invalidAmend = [invocation(["Missing scope on amend"], true, [], true)]
     expect(() => validateGitCommits(invalidAmend, defaultConfig, "git commit --amend -m ...")).toThrow(

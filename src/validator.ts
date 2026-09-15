@@ -97,6 +97,7 @@ export function validateGitCommits(
   config: CommitGuardConfig,
   originalCommand: string,
   workingDirectory?: string,
+  canReadLocalRepository = true,
 ): void {
   const allViolations: string[] = []
 
@@ -118,6 +119,13 @@ export function validateGitCommits(
       invocation.messages.length === 0 &&
       invocation.filePaths.length === 0
     ) {
+      if (!canReadLocalRepository) {
+        allViolations.push(
+          'Cannot validate the existing commit in a workspace-backed location. Provide an explicit inline message, for example: git commit --amend -s -m "kernel: fix race".',
+        )
+        continue
+      }
+
       if (invocation.gitDir !== undefined || invocation.workTree !== undefined) {
         allViolations.push(
           'Cannot validate an existing commit through --git-dir or --work-tree before shell permissions run. Provide an explicit inline message, for example: git commit --amend -s -m "kernel: fix race".',

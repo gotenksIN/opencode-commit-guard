@@ -103,6 +103,7 @@ The validation engine (`src/validator.ts`) enforces commit format invariants.
 - If no message is provided and `--amend` is not present, the invocation is rejected.
 - If `--amend` is present with no new message (`git commit --amend --no-edit`), validation passes.
 - No-edit amendments with `--git-dir` or `--work-tree` are rejected unless they provide an inline message.
+- Workspace-backed locations validate inline messages lexically but reject no-edit amendments that require a remote repository read.
 
 ### 2. Rule evaluation
 
@@ -134,6 +135,7 @@ The plugin (`src/plugin.ts`) wires the validation engine to OpenCode's tool exec
 - Checks if `event.tool` is `"shell"` or `"bash"`.
 - Extracts `command` from `event.input`.
 - Resolves a relative shell `workdir` from the session directory, expands `~`, and normalizes Windows shell paths with OpenCode-compatible rules.
+- Uses `location.workspaceID` to prevent local host reads for repositories that execute in remote workspaces.
 - Returns immediately if the command does not contain `"commit"`.
 - Runs `extractGitCommits(command)` and validates all found invocations.
 - Throwing an Error inside `execute.before` aborts tool execution and displays the error prompt to the agent.
