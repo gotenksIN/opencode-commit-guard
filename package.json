@@ -21,12 +21,12 @@
     "prepack": "bun run build"
   },
   "dependencies": {
-    "@opencode/plugin": "2.0.2"
+    "@opencode/plugin": "2.0.3"
   },
   "devDependencies": {
-    "@oxlint/plugins": "1.80.0",
+    "@oxlint/plugins": "1.83.0",
     "@types/bun": "latest",
-    "oxlint": "1.80.0",
+    "oxlint": "1.83.0",
     "typescript": "latest"
   },
   "engines": {
