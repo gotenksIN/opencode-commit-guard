@@ -199,6 +199,16 @@ describe("opencode-commit-guard plugin", () => {
     ).resolves.toBeUndefined()
   })
 
+  test("rejects ambiguous home directory changes for no-edit amendments", async () => {
+    const harness = await setupTestPlugin({}, testDir)
+
+    await expect(
+      harness.executeBefore("shell", {
+        command: "git -C '~/repository' commit --amend --no-edit",
+      }),
+    ).rejects.toThrow('shell directory change that starts with "~"')
+  })
+
   test("expands a home shell workdir like OpenCode", async () => {
     process.env.OPENCODE_TEST_HOME = testDir
     initializeRepository("kernel: valid existing message\n\nSigned-off-by: Test User <test@example.com>")
@@ -240,6 +250,7 @@ describe("opencode-commit-guard plugin", () => {
       expect(signoffFailure.reason.message).toContain("Missing commit signoff")
     }
   })
+
   test("rejects git commit commands missing signoff flag or trailer", async () => {
     const harness = await setupTestPlugin()
     await expect(

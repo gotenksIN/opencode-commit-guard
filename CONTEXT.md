@@ -104,6 +104,7 @@ The validation engine (`src/validator.ts`) enforces commit format invariants.
 - If `--amend` is present with no new message (`git commit --amend --no-edit`), validation passes.
 - No-edit amendments with `--git-dir` or `--work-tree` are rejected unless they provide an inline message.
 - Workspace-backed locations validate inline messages lexically but reject no-edit amendments that require a remote repository read.
+- No-edit amendments reject shell directory changes beginning with `~` because tokenization cannot safely distinguish quoted literal paths from shell-expanded paths.
 
 ### 2. Rule evaluation
 

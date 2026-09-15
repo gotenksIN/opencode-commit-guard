@@ -110,7 +110,7 @@ export function validateGitCommits(
     let messageDirectory = workingDirectory ?? process.cwd()
 
     for (const directoryChange of invocation.directoryChanges ?? []) {
-      messageDirectory = resolveLocationPath(messageDirectory, directoryChange)
+      messageDirectory = resolve(messageDirectory, directoryChange)
     }
 
     if (
@@ -119,6 +119,19 @@ export function validateGitCommits(
       invocation.messages.length === 0 &&
       invocation.filePaths.length === 0
     ) {
+      const hasAmbiguousHomeChange = invocation.directoryChanges?.some((directoryChange) =>
+        directoryChange === "~" ||
+        directoryChange.startsWith("~/") ||
+        (process.platform === "win32" && directoryChange.startsWith("~\\"))
+      ) === true
+
+      if (hasAmbiguousHomeChange) {
+        allViolations.push(
+          'Cannot validate an existing commit through a shell directory change that starts with "~". Provide an explicit inline message, for example: git commit --amend -s -m "kernel: fix race".',
+        )
+        continue
+      }
+
       if (!canReadLocalRepository) {
         allViolations.push(
           'Cannot validate the existing commit in a workspace-backed location. Provide an explicit inline message, for example: git commit --amend -s -m "kernel: fix race".',

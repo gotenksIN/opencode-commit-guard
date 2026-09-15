@@ -388,6 +388,21 @@ describe("validator - file inputs and amend commits", () => {
     )
   })
 
+  test("rejects ambiguous home paths for no-edit amendments", () => {
+    const inv = [{
+      ...invocation([], false, [], true),
+      hasNoEdit: true,
+      directoryChanges: ["~/repository"],
+    }]
+
+    expect(() => validateGitCommits(
+      inv,
+      defaultConfig,
+      "git -C '~/repository' commit --amend --no-edit",
+      testDir,
+    )).toThrow('shell directory change that starts with "~"')
+  })
+
   test("rejects external reads for workspace-backed validation", () => {
     const inv = [{ ...invocation([], false, [], true), hasNoEdit: true }]
 
