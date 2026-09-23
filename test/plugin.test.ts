@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import { Tool } from "@opencode/schema/tool"
 import { Effect } from "effect"
+import { createHash } from "node:crypto"
 import plugin from "../index.js"
+import { scopeFor } from "../src/capture.js"
+import { parseConfig } from "../src/config.js"
 import type { JsonValue } from "../src/types.js"
 
 interface HookEvent {
@@ -11,7 +14,7 @@ interface HookEvent {
 
 type ToolHookCallback = (event: HookEvent) => Effect.Effect<void, Tool.Error>
 
-async function setupTestPlugin(options: JsonValue = {}) {
+async function setupTestPlugin(options: JsonValue = {}, signing: "true" | "false" | "missing" = "true") {
   const hooks = new Map<string, ToolHookCallback>()
 
   const ctx = {
@@ -19,6 +22,9 @@ async function setupTestPlugin(options: JsonValue = {}) {
     location: {
       directory: import.meta.dir,
       project: { id: "test-project" },
+    },
+    session: {
+      get: () => Effect.succeed({ location: { directory: import.meta.dir } }),
     },
     tool: {
       transform: () => Effect.succeed({ dispose: Effect.void }),
@@ -31,6 +37,23 @@ async function setupTestPlugin(options: JsonValue = {}) {
     storage: {
       get: () => Effect.succeed(undefined),
       set: () => Effect.void,
+      scan: () => {
+        if (signing === "missing") return Effect.succeed({ entries: [] })
+
+        // SAFETY: The harness provides the location fields used by scopeFor.
+        const scope = scopeFor(ctx as never, "test-session", parseConfig(options))
+
+        const baseline = { directory: import.meta.dir, workdir: import.meta.dir, gitDir: `${import.meta.dir}/.git`, commonDir: `${import.meta.dir}/.git`,
+          branch: "main", head: null, messages: [], gpgsign: signing, signingkey: null }
+
+        const generation = "test-generation"
+        const sequence = "000000000000001-fixture"
+        const checksum = createHash("sha256").update(JSON.stringify([1, scope, 0, generation, sequence, baseline])).digest("hex")
+
+        return Effect.succeed({ entries: [{ key: `snap/${scope}/${sequence}`, value: {
+          schema: 1, scope, counter: 0, generation, sequence, baseline, checksum,
+        } }] })
+      },
     },
   }
 
@@ -42,7 +65,8 @@ async function setupTestPlugin(options: JsonValue = {}) {
       const hook = hooks.get("execute.before")
 
       if (hook !== undefined) {
-        await Effect.runPromise(hook({ tool, input }))
+        // SAFETY: The stub supplies the tool-call identity fields expected by the hook.
+        await Effect.runPromise(hook({ tool, input, sessionID: "test-session", agent: "build", messageID: "message", id: "call" } as never))
       }
     },
   }
@@ -161,6 +185,12 @@ describe("opencode-commit-guard plugin", () => {
     await expect(
       harness.executeBefore("shell", { command: 'git commit -m "kernel: fix race condition"' }),
     ).rejects.toThrow("Missing commit signoff")
+
+    const withoutBaseline = await setupTestPlugin({}, "missing")
+
+    await expect(
+      withoutBaseline.executeBefore("shell", { command: 'git commit -s -m "kernel: fix race condition"' }),
+    ).rejects.toThrow("Call commit_context")
   })
 
   test("rejects git commit commands exceeding line length", async () => {
@@ -196,14 +226,16 @@ describe("opencode-commit-guard plugin", () => {
     ).resolves.toBeUndefined()
   })
 
-  test("respects requireSignoff: false option override", async () => {
-    const harness = await setupTestPlugin({
-      requireSignoff: false,
-    })
+  test("does not require signoff when effective commit.gpgsign is false", async () => {
+    const harness = await setupTestPlugin({}, "false")
 
     await expect(
       harness.executeBefore("shell", { command: 'git commit -m "kernel: add foo without signoff"' }),
     ).resolves.toBeUndefined()
+
+    await expect(
+      harness.executeBefore("shell", { command: 'git -C elsewhere commit -m "kernel: wrong target"' }),
+    ).rejects.toThrow("Commit target is ambiguous")
   })
 
   test("respects requireScope: false option override", async () => {
@@ -226,8 +258,8 @@ describe("opencode-commit-guard plugin", () => {
     await expect(setupTestPlugin({ maxLineLength: -5 })).rejects.toThrow(
       "Invalid plugin option maxLineLength; expected an integer greater than or equal to 0.",
     )
-    await expect(setupTestPlugin({ requireSignoff: 123 })).rejects.toThrow(
-      "Invalid plugin option requireSignoff; expected a boolean.",
+    await expect(setupTestPlugin({ requireSignoff: true })).rejects.toThrow(
+      "Plugin option requireSignoff has been removed",
     )
   })
 })

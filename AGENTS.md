@@ -31,6 +31,7 @@ Always maintain compatibility with the OpenCode V2 plugin API.
 - Assert commit detection ignoring non-commit commands (`git log`, `git status`, `git commit-tree`, `echo`).
 - Assert validation rules for scopes, allowed scopes, line length limits, and signoffs.
 - Assert handling for file inputs (`-F`, `--file`) and amend commits (`--amend`).
-- Assert option overrides for `requireScope`, `allowedScopes`, `maxLineLength`, and `requireSignoff`.
+- Assert option overrides for `requireScope`, `allowedScopes`, and `maxLineLength`.
+- Assert signoff enforcement follows the captured effective `commit.gpgsign` value.
 - Do not write tests that only verify the presence of symbol names, command registrations, or type definitions.
 - Let the TypeScript compiler enforce static type relationships.

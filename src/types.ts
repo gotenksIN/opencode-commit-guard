@@ -25,14 +25,14 @@ export interface CommitGuardConfig {
   readonly requireScope: boolean
   readonly allowedScopes?: readonly string[]
   readonly maxLineLength: number
-  readonly requireSignoff: boolean
+  readonly enforceSignoff: boolean
 }
 
 export const defaultConfig: CommitGuardConfig = {
   requireScope: true,
   allowedScopes: undefined,
   maxLineLength: 72,
-  requireSignoff: true,
+  enforceSignoff: true,
 }
 
 export type ShellTokenType = "word" | "operator" | "redirect"
@@ -54,6 +54,7 @@ export interface GitCommitInvocation {
   readonly hasNoEdit?: boolean
   readonly isFixup?: boolean
   readonly isHelp: boolean
+  readonly targetError?: string
 }
 
 export interface OverlongLine {

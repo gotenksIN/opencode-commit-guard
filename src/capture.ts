@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto"
 import { closeSync, constants, fstatSync, mkdtempSync, openSync, readSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, relative } from "node:path"
 import type { Plugin } from "@opencode/plugin/effect"
-import { Effect } from "effect"
+import { Effect, Semaphore } from "effect"
 import { isJSONString, isRecord } from "./types.js"
 import type { CommitGuardConfig, JsonValue } from "./types.js"
 
@@ -15,10 +15,13 @@ const ttl = 20000
 
 const policy = "commit-guard-context-v1"
 
+const storageLock = Semaphore.makeUnsafe(1)
+
 type Context = Parameters<Plugin.Plugin["effect"]>[0]
 
 export interface Baseline {
   readonly directory: string
+  readonly workdir: string
   readonly gitDir: string
   readonly commonDir: string
   readonly branch: string | null
@@ -42,6 +45,7 @@ export interface Pending {
   readonly scope: string
   readonly command: string
   readonly directory: string
+  readonly workdir: string
   readonly file: string
   readonly fd: number
   readonly identity: { dev: number; ino: number; uid: number }
@@ -50,6 +54,7 @@ export interface Pending {
   readonly agent: string
   readonly sessionID: string
   claimed?: { messageID: string; id: string }
+  closed?: boolean
 }
 
 function digest(text: string): string {
@@ -78,17 +83,17 @@ export function counter(ctx: Context, scope: string): Effect.Effect<number> {
 }
 
 export function invalidate(ctx: Context, scope: string): Effect.Effect<void> {
-  return Effect.gen(function*() {
+  return storageLock.withPermits(1)(Effect.gen(function*() {
     const previous = yield* counter(ctx, scope)
 
     yield* ctx.storage.set(counterKey(scope), previous < 0 ? 1 : previous + 1)
-  })
+  }))
 }
 
 function validBaseline(value: JsonValue | undefined): value is Baseline & Record<string, JsonValue> {
   if (!isRecord(value)) return false
 
-  return ["directory", "gitDir", "commonDir"].every((key) => isJSONString(value[key])) &&
+  return ["directory", "workdir", "gitDir", "commonDir"].every((key) => isJSONString(value[key])) &&
     (value["branch"] === null || isJSONString(value["branch"])) &&
     (value["head"] === null || /^[0-9a-f]{40,64}$/.test(String(value["head"]))) &&
     Array.isArray(value["messages"]) && value["messages"].length <= 10 &&
@@ -98,7 +103,7 @@ function validBaseline(value: JsonValue | undefined): value is Baseline & Record
 }
 
 export function load(ctx: Context, scope: string): Effect.Effect<Baseline | undefined> {
-  return Effect.gen(function*() {
+  return storageLock.withPermits(1)(Effect.gen(function*() {
     const current = yield* counter(ctx, scope)
 
     if (current < 0) return undefined
@@ -126,7 +131,7 @@ export function load(ctx: Context, scope: string): Effect.Effect<Baseline | unde
     } while (after !== undefined)
 
     return newest?.baseline
-  })
+  }))
 }
 
 // Each line is a base64-encoded Git result. No Git output enters the shell result.
@@ -134,21 +139,22 @@ export function captureCommand(path: string): string {
   const quoted = `'${path.replaceAll("'", "'\\''")}'`
 
   return `timeout 15s bash -c 'set -euo pipefail
+ulimit -f 256
 out=$1
 printf "CTX1\\n" > "$out"
 field() { "$@" 2>/dev/null | base64 -w0 >> "$out"; printf "\\n" >> "$out"; }
 field git rev-parse --show-toplevel
 field git rev-parse --absolute-git-dir
 field git rev-parse --path-format=absolute --git-common-dir
-if git symbolic-ref -q --short HEAD >/dev/null 2>&1; then printf "branch\\n" >> "$out"; field git symbolic-ref -q --short HEAD; else printf "detached\\n" >> "$out"; fi
-if git rev-parse --verify HEAD >/dev/null 2>&1; then printf "head\\n" >> "$out"; field git rev-parse --verify HEAD; field git log -10 -z --format=%B%x00; else printf "unborn\\n\\n" >> "$out"; fi
+if git symbolic-ref -q --short HEAD >/dev/null 2>&1; then printf "branch\\n" >> "$out"; field git symbolic-ref -q --short HEAD; else printf "detached\\n\\n" >> "$out"; fi
+if git rev-parse --verify HEAD >/dev/null 2>&1; then printf "head\\n" >> "$out"; field git rev-parse --verify HEAD; field git log -10 -z --format=%B%x00; else printf "unborn\\n\\n\\n" >> "$out"; fi
 if git config --type=bool --get commit.gpgsign >/dev/null 2>&1; then printf "set\\n" >> "$out"; field git config --type=bool --get commit.gpgsign; else status=$?; if [ "$status" -eq 1 ]; then printf "unset\\n\\n" >> "$out"; else printf "error\\n\\n" >> "$out"; fi; fi
 if git config --get user.signingkey >/dev/null 2>&1; then printf "set\\n" >> "$out"; field git config --get user.signingkey; else status=$?; if [ "$status" -eq 1 ]; then printf "unset\\n\\n" >> "$out"; else printf "error\\n\\n" >> "$out"; fi; fi
 printf "END\\n" >> "$out"
-printf "RECEIPT_OK\\n"' bash ${quoted}`
+printf "RECEIPT_OK\\n"' bash ${quoted} 2>/dev/null`
 }
 
-export function createPending(scope: string, sessionID: string, agent: string, counterValue: number): Pending {
+export function createPending(scope: string, sessionID: string, agent: string, counterValue: number, workdir: string): Pending {
   const directory = mkdtempSync(join(tmpdir(), "commit-context-"))
 
   try {
@@ -156,7 +162,7 @@ export function createPending(scope: string, sessionID: string, agent: string, c
     const fd = openSync(file, constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_RDWR, 0o600)
     const stat = fstatSync(fd)
 
-    return { scope, sessionID, agent, counter: counterValue, directory, file, fd,
+    return { scope, sessionID, agent, counter: counterValue, directory, workdir, file, fd,
       identity: { dev: stat.dev, ino: stat.ino, uid: stat.uid }, expires: Date.now() + ttl,
       command: captureCommand(file) }
   } catch (error) {
@@ -166,6 +172,9 @@ export function createPending(scope: string, sessionID: string, agent: string, c
 }
 
 export function cleanup(pending: Pending): void {
+  if (pending.closed === true) return
+
+  pending.closed = true
   closeSync(pending.fd)
   rmSync(pending.directory, { recursive: true, force: true })
 }
@@ -188,6 +197,10 @@ export function importCapture(pending: Pending): Baseline {
 
   if (readSync(pending.fd, bytes, 0, stat.size, 0) !== stat.size) throw new Error("Incomplete private capture artifact")
 
+  const completed = fstatSync(pending.fd)
+
+  if (completed.size !== stat.size || completed.dev !== stat.dev || completed.ino !== stat.ino) throw new Error("Capture changed during import")
+
   const fields = bytes.toString("utf8").split("\n")
 
   if (fields.length !== 15 || fields[0] !== "CTX1" || fields[13] !== "END" || fields[14] !== "") throw new Error("Incomplete capture")
@@ -200,6 +213,7 @@ export function importCapture(pending: Pending): Baseline {
   const messages = head === null ? [] : rawLog.split("\0\0").filter((message) => message.length > 0)
 
   if (!root.startsWith("/") || !gitDir.startsWith("/") || !commonDir.startsWith("/") ||
+    relative(root, pending.workdir).startsWith("..") ||
     !["branch", "detached"].includes(fields[4]!) || !["head", "unborn"].includes(fields[6]!) ||
     (head !== null && !/^[a-f0-9]{40,64}$/.test(head)) ||
     (head === null && rawLog !== "") || (head !== null && (messages.length === 0 || messages.length > 10 || !rawLog.endsWith("\0\0")))) throw new Error("Invalid Git baseline")
@@ -211,12 +225,12 @@ export function importCapture(pending: Pending): Baseline {
 
   const signingkey = fields[11] === "set" ? decode(fields[12]!).trim() : fields[11] === "unset" ? null : "error"
 
-  return { directory: root, gitDir, commonDir, branch, head, messages, gpgsign, signingkey }
+  return { directory: root, workdir: pending.workdir, gitDir, commonDir, branch, head, messages, gpgsign, signingkey }
 }
 
-export function publish(ctx: Context, pending: Pending, generation: string, baseline: Baseline): Effect.Effect<void> {
-  return Effect.gen(function*() {
-    if ((yield* counter(ctx, pending.scope)) !== pending.counter) return
+export function publish(ctx: Context, pending: Pending, generation: string, baseline: Baseline): Effect.Effect<boolean> {
+  return storageLock.withPermits(1)(Effect.gen(function*() {
+    if ((yield* counter(ctx, pending.scope)) !== pending.counter) return false
     const sequence = `${Date.now().toString().padStart(15, "0")}-${randomUUID()}`
 
     const entry: Entry = { schema: version, scope: pending.scope, counter: pending.counter, generation, sequence, baseline,
@@ -227,5 +241,19 @@ export function publish(ctx: Context, pending: Pending, generation: string, base
       sequence: entry.sequence, checksum: entry.checksum,
       baseline: { ...baseline, messages: [...baseline.messages] },
     })
-  })
+
+    let after: string | undefined
+
+    do {
+      const page = yield* ctx.storage.scan({ prefix: prefix(pending.scope), after, limit: 100 })
+
+      for (const record of page.entries) {
+        if (record.key < prefix(pending.scope) + sequence) yield* ctx.storage.remove(record.key)
+      }
+
+      after = page.next
+    } while (after !== undefined)
+
+    return true
+  }))
 }

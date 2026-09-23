@@ -253,9 +253,9 @@ describe("validator - signoff requirement", () => {
     )
   })
 
-  test("allows commit without signoff when requireSignoff is false", () => {
+  test("allows commit without signoff when the captured signing policy does not enforce it", () => {
     const inv = [invocation(["kernel: add foo"], false)]
-    const config = { ...defaultConfig, requireSignoff: false }
+    const config = { ...defaultConfig, enforceSignoff: false }
     expect(() => validateGitCommits(inv, config, "git commit")).not.toThrow()
   })
 

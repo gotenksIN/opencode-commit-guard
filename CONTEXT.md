@@ -14,14 +14,14 @@ export interface CommitGuardConfig {
   readonly requireScope: boolean
   readonly allowedScopes?: readonly string[]
   readonly maxLineLength: number
-  readonly requireSignoff: boolean
 }
 ```
 
 - `requireScope`: Enforces that the commit subject begins with `<scope>: <subject>`. Defaults to `true`.
 - `allowedScopes`: Optional list of valid scope names. When defined, the extracted scope must match an item in this list. Defaults to `undefined`.
 - `maxLineLength`: Maximum allowed line length across subject and body lines. Defaults to `72`. Setting this to `0` disables length checks.
-- `requireSignoff`: Enforces that the commit includes `-s` / `--signoff` or a `Signed-off-by:` trailer. Defaults to `true`.
+- Signoff applies only when a verified baseline records effective `commit.gpgsign=true`.
+  A missing, failed, or stale baseline blocks the commit.
 
 ### Commit invocation
 
@@ -34,6 +34,7 @@ export interface GitCommitInvocation {
   readonly hasSignoffFlag: boolean
   readonly isAmend: boolean
   readonly isHelp: boolean
+  readonly targetError?: string
 }
 ```
 
@@ -42,6 +43,7 @@ export interface GitCommitInvocation {
 - `hasSignoffFlag`: `true` when `-s` or `--signoff` was passed; `false` when omitted or explicitly overridden by `--no-signoff`.
 - `isAmend`: `true` when `--amend` was passed.
 - `isHelp`: `true` when `-h` or `--help` was passed.
+- `targetError`: Describes a directory or Git configuration override that prevents reliable target matching.
 - `stdinMessage` and `stdinError`: Hold a validated quoted heredoc body or an actionable stdin-input rejection.
 
 ### Diagnostics
@@ -117,7 +119,7 @@ The validation engine (`src/validator.ts`) enforces commit format invariants.
 3. **Line length (`maxLineLength`)**:
    - Evaluates every line in the assembled commit text against the maximum line length (default 72).
    - Records each overlong line with its 1-based index and character count.
-4. **Signoff (`requireSignoff`)**:
+4. **Signoff (captured `commit.gpgsign`)**:
    - Satisfied if `hasSignoffFlag` is true or if any line in the message body matches `/^\s*Signed-off-by:\s+[^<>\r\n]+\s+<[^<>\r\n@]+@[^<>\r\n@]+>\s*$/i`.
 
 ### 3. Error construction
@@ -138,7 +140,25 @@ The plugin (`src/plugin.ts`) wires the validation engine to OpenCode's tool exec
 - Extracts `command` from `event.input`.
 - Does not read repository history or message files before the shell permission check.
 - Runs `extractGitCommits(command)` and validates all found invocations.
+- Loads a checksum-validated, session-and-worktree-scoped signing baseline from plugin storage.
+- Rejects missing or invalid baselines, remote workspaces, and commits whose target differs from the captured checkout.
+- Requires signoff only when the baseline records effective `commit.gpgsign=true`.
 - Validation failures use the typed `Tool.Error` failure channel so parallel calls settle independently without becoming Effect defects.
+
+## Authorized context capture
+
+The on-demand `commit_context` tool returns a Git capture command for the foreground `shell` tool.
+The plugin creates a private owner-only artifact and retains its file descriptor before returning the command.
+It claims the exact command against the shell tool-call identity before execution.
+After a completed foreground exit, it validates bounded artifact framing, ownership, size, and a final end sentinel through that descriptor.
+Only then does it store a checksum-protected snapshot under a unique key.
+The snapshot contains the checkout identity, branch, HEAD, up to ten full messages, and effective signing settings.
+Storage scopes include schema, project, session, location, and policy revision.
+A persisted invalidation counter prevents a late snapshot from replacing a refreshed or cancelled baseline.
+The tool returns only bounded guidance and observed scope examples, never complete historical messages.
+Refresh the frozen baseline after a branch switch, signing setting change, or changed commit instructions.
+The plugin does not detect configuration changes or repository replacement at the same path without another authorized capture.
+The guard does not verify cryptographic signatures or enforce all writing conventions in `AGENTS.md`.
 
 ## Packaging and runtime invariants
 

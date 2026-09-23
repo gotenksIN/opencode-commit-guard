@@ -8,6 +8,7 @@ const gitGlobalOptionsWithArg = new Set([
   "--namespace",
   "--exec-path",
   "--super-prefix",
+  "--config-env",
 ])
 
 const commandPrefixes = new Set([
@@ -570,6 +571,10 @@ function extractInvocation(
   wordIndex++
   let subcommand: string | undefined
 
+  let targetError = words.slice(0, commandStart).some((word) => word === "env" || /^[a-zA-Z_][a-zA-Z0-9_]*=/.test(word) || word === "export")
+    ? "Environment or wrapper changes can redirect a Git commit target. Use a direct git commit in the captured workdir."
+    : undefined
+
   while (wordIndex < words.length) {
     const argument = words[wordIndex]
 
@@ -582,6 +587,10 @@ function extractInvocation(
     }
 
     if (gitGlobalOptionsWithArg.has(argument)) {
+      if (argument === "-C" || argument === "--git-dir" || argument === "--work-tree" || argument === "-c" || argument === "--config-env") {
+        targetError = "Git global directory or configuration flags can change the commit target or signing policy. Use a direct git commit in the captured workdir."
+      }
+
       wordIndex += 2
       continue
     }
@@ -592,13 +601,19 @@ function extractInvocation(
       argument.startsWith("--namespace=") ||
       argument.startsWith("--exec-path=") ||
       argument.startsWith("--super-prefix=") ||
+      argument.startsWith("--config-env=") ||
       argument.startsWith("-c")
     ) {
+      if (argument.startsWith("--git-dir=") || argument.startsWith("--work-tree=") || argument.startsWith("--config-env=") || argument.startsWith("-c")) {
+        targetError = "Git global directory or configuration flags can change the commit target or signing policy. Use a direct git commit in the captured workdir."
+      }
+
       wordIndex++
       continue
     }
 
     if (argument.startsWith("-C")) {
+      targetError = "git -C can change the commit target. Run git commit directly in the captured workdir."
       wordIndex++
       continue
     }
@@ -711,12 +726,14 @@ function extractInvocation(
     hasNoEdit,
     isFixup,
     isHelp,
+    targetError,
   }
 }
 
-export function extractGitCommits(command: string): GitCommitInvocation[] {
+export function extractGitCommits(command: string, inheritedDirectoryChange = false): GitCommitInvocation[] {
   const tokens = tokenizeShell(command)
   const invocations: GitCommitInvocation[] = []
+  let changedDirectory = inheritedDirectoryChange
 
   for (const simple of splitSimpleCommands(tokens)) {
     const commandTokens = simple.tokens
@@ -724,9 +741,15 @@ export function extractGitCommits(command: string): GitCommitInvocation[] {
     const commandStart = findCommandStart(words)
     const invocation = extractInvocation(words, commandStart)
 
+    if (["cd", "pushd", "popd", "chdir", "export"].includes(words[commandStart] ?? "")) changedDirectory = true
+
     if (invocation !== undefined) {
+      const target = changedDirectory
+        ? { ...invocation, targetError: "A preceding directory or environment change makes the commit target ambiguous. Run git commit in a separate shell call with the captured workdir." }
+        : invocation
+
       if (!invocation.filePaths.includes("-")) {
-        invocations.push(invocation)
+        invocations.push(target)
         continue
       }
 
@@ -751,7 +774,7 @@ export function extractGitCommits(command: string): GitCommitInvocation[] {
       }
 
       invocations.push({
-        ...invocation,
+        ...target,
         stdinMessage: stdinError === undefined ? heredoc?.heredoc?.body : undefined,
         stdinError,
       })
@@ -760,7 +783,7 @@ export function extractGitCommits(command: string): GitCommitInvocation[] {
 
   for (const token of tokens) {
     for (const substitution of token.substitutions ?? []) {
-      invocations.push(...extractGitCommits(substitution))
+      invocations.push(...extractGitCommits(substitution, changedDirectory))
     }
   }
 

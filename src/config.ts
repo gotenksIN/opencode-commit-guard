@@ -60,21 +60,14 @@ export function parseConfig(options: JsonValue | undefined): CommitGuardConfig {
     maxLineLength = rawMaxLineLength as number
   }
 
-  const rawRequireSignoff = options["requireSignoff"]
-  let requireSignoff = defaultConfig.requireSignoff
-
-  if (rawRequireSignoff !== undefined) {
-    if (!isJSONBoolean(rawRequireSignoff)) {
-      throw new Error("Invalid plugin option requireSignoff; expected a boolean.")
-    }
-
-    requireSignoff = rawRequireSignoff
+  if (options["requireSignoff"] !== undefined) {
+    throw new Error("Plugin option requireSignoff has been removed; signoff follows the captured effective commit.gpgsign value.")
   }
 
   return {
     requireScope,
     allowedScopes,
     maxLineLength,
-    requireSignoff,
+    enforceSignoff: defaultConfig.enforceSignoff,
   }
 }

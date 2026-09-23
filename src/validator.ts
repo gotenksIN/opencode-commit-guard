@@ -172,7 +172,7 @@ export function validateGitCommits(
       }
     }
 
-    if (config.requireSignoff) {
+    if (config.enforceSignoff) {
       const hasSignoff = invocation.hasSignoffFlag || hasSignoffTrailer(lines)
 
       if (!hasSignoff) {
