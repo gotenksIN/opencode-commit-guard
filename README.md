@@ -86,7 +86,7 @@ When a line exceeds this limit, the error identifies the exact line number, curr
 
 ### 4. Signoff (`requireSignoff`)
 
-Every commit must include a signoff indicator.
+Every commit with a supplied message must include a signoff indicator.
 You can provide this either via flags or directly in the message body:
 
 - Pass `-s` or `--signoff` in the git command.
@@ -94,9 +94,9 @@ You can provide this either via flags or directly in the message body:
 
 ### 5. Amend commits (`--amend`)
 
-Provide an explicit inline message with `-m` when you amend a commit.
-The plugin rejects `git commit --amend --no-edit` without a message because reading the existing message would bypass shell permission checks.
-The plugin validates explicit amendment messages in all repository locations.
+Use `git commit --amend --no-edit` to keep the existing message unchanged.
+The plugin does not read or revalidate that message, so a message created outside this guard may not meet its format rules.
+Provide `-m` when you change the message; the plugin validates the supplied text in all repository locations.
 
 ### Message input
 

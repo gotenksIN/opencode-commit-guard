@@ -102,8 +102,8 @@ The validation engine (`src/validator.ts`) enforces commit format invariants.
 - One complete, quoted heredoc attached directly to descriptor 0 of `git commit -F -` supplies a literal message.
 - Pipelines, multiple heredocs, inherited compound-command input, nonzero descriptors, competing stdin redirects, and unquoted delimiters are rejected for `-F -`.
 - The plugin never reads `-F` or `--file` message files because the pre-execution hook has no permission-checked file access boundary.
-- If no message is provided and `--amend` is not present, the invocation is rejected.
-- `git commit --amend --no-edit` without an explicit inline message is rejected in every repository location.
+- If no message is provided, the invocation is rejected unless it uses `--amend --no-edit` or a generated fixup message.
+- `git commit --amend --no-edit` without a new message retains the existing message without reading or revalidating repository history.
 - Explicit amendment messages are validated without reading repository history.
 
 ### 2. Rule evaluation

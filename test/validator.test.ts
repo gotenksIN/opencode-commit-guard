@@ -298,10 +298,15 @@ describe("validator - file inputs and amend commits", () => {
     expect(() => validateGitCommits(inv, defaultConfig, "git commit --fixup=HEAD")).not.toThrow()
   })
 
-  test("rejects no-edit amendments before reading repository history", () => {
+  test("allows no-edit amendments without reading repository history or message files", () => {
     const inv = [{ ...invocation([], false, [], true), hasNoEdit: true }]
-    expect(() => validateGitCommits(inv, defaultConfig, "git commit --amend --no-edit")).toThrow(
-      "Provide an explicit inline message",
+    expect(() => validateGitCommits(inv, defaultConfig, "git commit --amend --no-edit")).not.toThrow()
+    expect(() => validateGitCommits(
+      [{ ...invocation([], false, ["message.txt"], true), hasNoEdit: true }],
+      defaultConfig,
+      "git commit --amend --no-edit -F message.txt",
+    )).toThrow(
+      'Cannot validate a commit message from file "message.txt"',
     )
   })
 

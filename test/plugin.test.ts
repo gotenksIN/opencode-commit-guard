@@ -101,11 +101,11 @@ describe("opencode-commit-guard plugin", () => {
     ).rejects.toThrow('Missing scope in subject line "fixup! invalid subject"')
   })
 
-  test("rejects an amendment without an explicit message", async () => {
+  test("allows a no-edit amendment without an explicit message", async () => {
     const harness = await setupTestPlugin()
     await expect(
       harness.executeBefore("shell", { command: "git commit --amend --no-edit" }),
-    ).rejects.toThrow("Provide an explicit inline message")
+    ).resolves.toBeUndefined()
   })
 
   test("validates an amendment when an explicit message is provided", async () => {

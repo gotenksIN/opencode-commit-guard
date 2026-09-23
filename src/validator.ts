@@ -65,17 +65,6 @@ export function validateGitCommits(
 
     const collectedMessages: string[] = [...invocation.messages]
 
-    if (
-      invocation.isAmend &&
-      invocation.hasNoEdit === true &&
-      invocation.messages.length === 0
-    ) {
-      allViolations.push(
-        'Cannot validate --amend --no-edit before shell permissions run because it would read the existing commit. Provide an explicit inline message, for example: git commit --amend -s -m "kernel: fix race".',
-      )
-      continue
-    }
-
     const filePath = invocation.filePaths.at(-1)
 
     if (filePath !== undefined) {
@@ -97,6 +86,10 @@ export function validateGitCommits(
     }
 
     if (collectedMessages.length === 0) {
+      if (invocation.isAmend && invocation.hasNoEdit === true) {
+        continue
+      }
+
       if (invocation.isFixup === true) {
         continue
       }
