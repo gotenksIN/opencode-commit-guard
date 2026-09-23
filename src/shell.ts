@@ -576,7 +576,7 @@ function extractInvocation(
   wordIndex++
   let subcommand: string | undefined
 
-  let targetError = words.slice(0, commandStart).some((word) => word === "env" || /^[a-zA-Z_][a-zA-Z0-9_]*=/.test(word) || word === "export")
+  let targetError = words.slice(0, commandStart).some((word) => word === "env" || isAssignment(word) || word === "export")
     ? "Environment or wrapper changes can redirect a Git commit target. Use a direct git commit in the captured workdir."
     : undefined
 
