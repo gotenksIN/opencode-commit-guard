@@ -2,6 +2,14 @@
 
 All notable changes to `opencode-commit-guard` are documented in this file.
 
+## 1.0.3 (2026-09-23)
+
+- Update compatible OpenCode V2, schema, Effect, and Bun development dependencies.
+- Stop reading repository history in pre-execution validation; require an explicit message for no-edit amendments.
+- Validate Git subcommands with quoted shell fragments.
+- Accept one complete quoted stdin heredoc for `git commit -F -` and reject ambiguous input before execution.
+- Continue rejecting disk-backed `-F <path>` commit messages.
+
 ## 1.0.2 (2026-09-15)
 
 - Update OpenCode V2 and Oxlint dependencies.
