@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { spawnSync } from "node:child_process"
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { defaultConfig } from "../src/types.js"
@@ -26,34 +25,6 @@ function invocation(
     isAmend,
     isHelp,
   }
-}
-
-function runGit(args: readonly string[]): void {
-  const result = spawnSync("git", args, {
-    cwd: testDir,
-    encoding: "utf-8",
-    stdio: ["ignore", "pipe", "pipe"],
-  })
-
-  if (result.status !== 0) {
-    throw new Error(`Git test setup failed: ${result.stderr}`)
-  }
-}
-
-function initializeRepository(message: string): void {
-  mkdirSync(testDir, { recursive: true })
-  runGit(["init", "--quiet"])
-  runGit([
-    "-c",
-    "user.name=Test User",
-    "-c",
-    "user.email=test@example.com",
-    "commit",
-    "--allow-empty",
-    "--no-gpg-sign",
-    "-m",
-    message,
-  ])
 }
 
 describe("validator - scope rules", () => {
@@ -312,7 +283,7 @@ describe("validator - file inputs and amend commits", () => {
     let caught: Error | undefined
 
     try {
-      validateGitCommits(inv, defaultConfig, "git commit -F ...", testDir)
+      validateGitCommits(inv, defaultConfig, "git commit -F ...")
     } catch (error) {
       if (error instanceof Error) caught = error
     }
@@ -327,48 +298,10 @@ describe("validator - file inputs and amend commits", () => {
     expect(() => validateGitCommits(inv, defaultConfig, "git commit --fixup=HEAD")).not.toThrow()
   })
 
-  test("validates the existing message for amend with no edit", () => {
-    initializeRepository("kernel: valid existing message\n\nSigned-off-by: Test User <test@example.com>")
+  test("rejects no-edit amendments before reading repository history", () => {
     const inv = [{ ...invocation([], false, [], true), hasNoEdit: true }]
-    expect(() => validateGitCommits(inv, defaultConfig, "git commit --amend --no-edit", testDir)).not.toThrow()
-  })
-
-  test("rejects amend with no edit when the existing scope is invalid", () => {
-    initializeRepository("Missing scope on existing commit\n\nSigned-off-by: Test User <test@example.com>")
-    const inv = [{ ...invocation([], false, [], true), hasNoEdit: true }]
-    expect(() => validateGitCommits(inv, defaultConfig, "git commit --amend --no-edit", testDir)).toThrow(
-      "Missing scope in subject line",
-    )
-  })
-
-  test("rejects amend with no edit when the existing message exceeds the line limit", () => {
-    initializeRepository(`kernel: ${"a".repeat(70)}\n\nSigned-off-by: Test User <test@example.com>`)
-    const inv = [{ ...invocation([], false, [], true), hasNoEdit: true }]
-    expect(() => validateGitCommits(inv, defaultConfig, "git commit --amend --no-edit", testDir)).toThrow(
-      "exceeds maximum line length",
-    )
-  })
-
-  test("enforces signoff options when amending with no edit", () => {
-    initializeRepository("kernel: existing message without signoff")
-    const unsigned = [{ ...invocation([], false, [], true), hasNoEdit: true }]
-    expect(() => validateGitCommits(unsigned, defaultConfig, "git commit --amend --no-edit", testDir)).toThrow(
-      "Missing commit signoff",
-    )
-
-    const signed = [{ ...invocation([], true, [], true), hasNoEdit: true }]
-    expect(() => validateGitCommits(signed, defaultConfig, "git commit --amend --no-edit -s", testDir)).not.toThrow()
-
-    const config = { ...defaultConfig, requireSignoff: false }
-    expect(() => validateGitCommits(unsigned, config, "git commit --amend --no-edit", testDir)).not.toThrow()
-  })
-
-  test("rejects amend with no edit when HEAD cannot be read", () => {
-    mkdirSync(testDir, { recursive: true })
-    runGit(["init", "--quiet"])
-    const inv = [{ ...invocation([], false, [], true), hasNoEdit: true }]
-    expect(() => validateGitCommits(inv, defaultConfig, "git commit --amend --no-edit", testDir)).toThrow(
-      "Failed to read the existing HEAD commit message",
+    expect(() => validateGitCommits(inv, defaultConfig, "git commit --amend --no-edit")).toThrow(
+      "Provide an explicit inline message",
     )
   })
 
@@ -380,10 +313,7 @@ describe("validator - file inputs and amend commits", () => {
       workTree: "../outside",
     }]
 
-    expect(() => validateGitCommits(inv, defaultConfig, "git --git-dir ../outside.git commit --amend --no-edit", testDir)).toThrow(
-      "Cannot validate an existing commit through --git-dir or --work-tree",
-    )
-    expect(() => validateGitCommits(inv, defaultConfig, "git --git-dir ../outside.git commit --amend --no-edit", testDir)).toThrow(
+    expect(() => validateGitCommits(inv, defaultConfig, "git --git-dir ../outside.git commit --amend --no-edit")).toThrow(
       'git commit --amend -s -m "kernel: fix race"',
     )
   })
@@ -399,8 +329,7 @@ describe("validator - file inputs and amend commits", () => {
       inv,
       defaultConfig,
       "git -C '~/repository' commit --amend --no-edit",
-      testDir,
-    )).toThrow('shell directory change that starts with "~"')
+    )).toThrow("Provide an explicit inline message")
   })
 
   test("rejects external reads for workspace-backed validation", () => {
@@ -410,9 +339,7 @@ describe("validator - file inputs and amend commits", () => {
       inv,
       defaultConfig,
       "git commit --amend --no-edit",
-      testDir,
-      false,
-    )).toThrow("Cannot validate the existing commit in a workspace-backed location")
+    )).toThrow("Provide an explicit inline message")
   })
 
   test("validates amend commits when new message is provided", () => {

@@ -144,20 +144,12 @@ describe("opencode-commit-guard plugin", () => {
     ).rejects.toThrow('Missing scope in subject line "fixup! invalid subject"')
   })
 
-  test("validates the existing commit for amend with no edit", async () => {
+  test("rejects an amendment without an explicit message", async () => {
     initializeRepository("kernel: valid existing message\n\nSigned-off-by: Test User <test@example.com>")
     const harness = await setupTestPlugin({}, testDir)
     await expect(
       harness.executeBefore("shell", { command: "git commit --amend --no-edit" }),
-    ).resolves.toBeUndefined()
-  })
-
-  test("rejects amend with no edit when the existing commit is invalid", async () => {
-    initializeRepository("Invalid existing message\n\nSigned-off-by: Test User <test@example.com>")
-    const harness = await setupTestPlugin({}, testDir)
-    await expect(
-      harness.executeBefore("shell", { command: "git commit --amend --no-edit" }),
-    ).rejects.toThrow("Missing scope in subject line")
+    ).rejects.toThrow("Provide an explicit inline message")
   })
 
   test("rejects no-edit amendments with explicit repository selectors", async () => {
@@ -167,7 +159,7 @@ describe("opencode-commit-guard plugin", () => {
       harness.executeBefore("shell", {
         command: "git --git-dir ../outside.git --work-tree ../outside commit --amend --no-edit",
       }),
-    ).rejects.toThrow("Cannot validate an existing commit through --git-dir or --work-tree")
+    ).rejects.toThrow("Provide an explicit inline message")
   })
 
   test("avoids local repository reads for workspace-backed locations", async () => {
@@ -176,7 +168,7 @@ describe("opencode-commit-guard plugin", () => {
 
     await expect(
       harness.executeBefore("shell", { command: "git commit --amend --no-edit" }),
-    ).rejects.toThrow("Cannot validate the existing commit in a workspace-backed location")
+    ).rejects.toThrow("Provide an explicit inline message")
     await expect(
       harness.executeBefore("shell", { command: 'git commit --amend -s -m "kernel: valid remote message"' }),
     ).resolves.toBeUndefined()
@@ -185,7 +177,7 @@ describe("opencode-commit-guard plugin", () => {
     ).rejects.toThrow("Missing scope in subject line")
   })
 
-  test("resolves a relative shell workdir from the session directory", async () => {
+  test("rejects no-edit amendments with a relative shell workdir", async () => {
     const sessionDirectory = join(testDir, "session")
     const repositoryDirectory = join(sessionDirectory, "nested")
     initializeRepository("kernel: valid existing message\n\nSigned-off-by: Test User <test@example.com>", repositoryDirectory)
@@ -196,7 +188,7 @@ describe("opencode-commit-guard plugin", () => {
         command: "git commit --amend --no-edit",
         workdir: "nested",
       }),
-    ).resolves.toBeUndefined()
+    ).rejects.toThrow("Provide an explicit inline message")
   })
 
   test("rejects ambiguous home directory changes for no-edit amendments", async () => {
@@ -206,10 +198,10 @@ describe("opencode-commit-guard plugin", () => {
       harness.executeBefore("shell", {
         command: "git -C '~/repository' commit --amend --no-edit",
       }),
-    ).rejects.toThrow('shell directory change that starts with "~"')
+    ).rejects.toThrow("Provide an explicit inline message")
   })
 
-  test("expands a home shell workdir like OpenCode", async () => {
+  test("rejects no-edit amendments with a home shell workdir", async () => {
     process.env.OPENCODE_TEST_HOME = testDir
     initializeRepository("kernel: valid existing message\n\nSigned-off-by: Test User <test@example.com>")
     const harness = await setupTestPlugin({}, join(testDir, "session"))
@@ -219,7 +211,7 @@ describe("opencode-commit-guard plugin", () => {
         command: "git commit --amend --no-edit",
         workdir: "~",
       }),
-    ).resolves.toBeUndefined()
+    ).rejects.toThrow("Provide an explicit inline message")
   })
 
   test("rejects git commit commands with invalid format before execution", async () => {
