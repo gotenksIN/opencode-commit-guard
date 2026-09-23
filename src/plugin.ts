@@ -34,10 +34,6 @@ export const plugin = Plugin.define({
           return
         }
 
-        if (!command.includes("commit")) {
-          return
-        }
-
         const invocations = extractGitCommits(command)
 
         if (invocations.length === 0) {

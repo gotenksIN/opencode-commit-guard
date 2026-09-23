@@ -219,6 +219,9 @@ describe("opencode-commit-guard plugin", () => {
     await expect(
       harness.executeBefore("shell", { command: 'git commit -m "Missing scope entirely" -s' }),
     ).rejects.toThrow("Missing scope in subject line")
+    await expect(
+      harness.executeBefore("shell", { command: 'git com""mit -m "Missing scope entirely" -s' }),
+    ).rejects.toThrow("Missing scope in subject line")
   })
 
   test("settles parallel validation failures as independent tool errors", async () => {
