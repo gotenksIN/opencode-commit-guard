@@ -51,20 +51,16 @@ export const plugin = Plugin.define({
         preparing.add(scope)
 
         return yield* Effect.gen(function*() {
+        // SAFETY: The tool input schema permits only a refresh boolean.
+        const request = input as { refresh?: boolean }
         const previous = pending.get(scope)
 
         if (previous !== undefined) {
-          // SAFETY: The tool input schema permits only a refresh boolean.
-          const refreshing = input as { refresh?: boolean }
-
-          if (Date.now() < previous.expires && refreshing.refresh !== true) return { content: `Run this shell command with workdir ${ctx.location.directory} and background:false, then call commit_context again:\n${previous.command}` }
+          if (Date.now() < previous.expires && request.refresh !== true) return { content: `Run this shell command with workdir ${ctx.location.directory} and background:false, then call commit_context again:\n${previous.command}` }
           pending.delete(scope)
           cleanup(previous)
           yield* invalidate(ctx, scope)
         }
-
-        // SAFETY: The tool input schema permits only a refresh boolean.
-        const request = input as { refresh?: boolean }
 
         if (request.refresh !== true) {
           const baseline = yield* load(ctx, scope)

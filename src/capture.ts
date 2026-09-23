@@ -31,22 +31,11 @@ export interface Baseline {
   readonly signingkey: string | null | "error"
 }
 
-interface Entry {
-  readonly schema: number
-  readonly scope: string
-  readonly counter: number
-  readonly generation: string
-  readonly sequence: string
-  readonly checksum: string
-  readonly baseline: Baseline
-}
-
 export interface Pending {
   readonly scope: string
   readonly command: string
   readonly directory: string
   readonly workdir: string
-  readonly file: string
   readonly fd: number
   readonly identity: { dev: number; ino: number; uid: number }
   readonly expires: number
@@ -135,7 +124,7 @@ export function load(ctx: Context, scope: string): Effect.Effect<Baseline | unde
 }
 
 // Each line is a base64-encoded Git result. No Git output enters the shell result.
-export function captureCommand(path: string): string {
+function captureCommand(path: string): string {
   const quoted = `'${path.replaceAll("'", "'\\''")}'`
 
   return `timeout 15s bash -c 'set -euo pipefail
@@ -162,7 +151,7 @@ export function createPending(scope: string, sessionID: string, agent: string, c
     const fd = openSync(file, constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_RDWR, 0o600)
     const stat = fstatSync(fd)
 
-    return { scope, sessionID, agent, counter: counterValue, directory, workdir, file, fd,
+    return { scope, sessionID, agent, counter: counterValue, directory, workdir, fd,
       identity: { dev: stat.dev, ino: stat.ino, uid: stat.uid }, expires: Date.now() + ttl,
       command: captureCommand(file) }
   } catch (error) {
@@ -232,13 +221,15 @@ export function publish(ctx: Context, pending: Pending, generation: string, base
   return storageLock.withPermits(1)(Effect.gen(function*() {
     if ((yield* counter(ctx, pending.scope)) !== pending.counter) return false
     const sequence = `${Date.now().toString().padStart(15, "0")}-${randomUUID()}`
-
-    const entry: Entry = { schema: version, scope: pending.scope, counter: pending.counter, generation, sequence, baseline,
-      checksum: digest(JSON.stringify([version, pending.scope, pending.counter, generation, sequence, baseline])) }
+    const checksum = digest(JSON.stringify([version, pending.scope, pending.counter, generation, sequence, baseline]))
 
     yield* ctx.storage.set(prefix(pending.scope) + sequence, {
-      schema: entry.schema, scope: entry.scope, counter: entry.counter, generation: entry.generation,
-      sequence: entry.sequence, checksum: entry.checksum,
+      schema: version,
+      scope: pending.scope,
+      counter: pending.counter,
+      generation,
+      sequence,
+      checksum,
       baseline: { ...baseline, messages: [...baseline.messages] },
     })
 
