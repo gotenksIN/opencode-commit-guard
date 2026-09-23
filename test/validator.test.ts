@@ -305,43 +305,6 @@ describe("validator - file inputs and amend commits", () => {
     )
   })
 
-  test("rejects no-edit amendments with explicit repository selectors", () => {
-    const inv = [{
-      ...invocation([], false, [], true),
-      hasNoEdit: true,
-      gitDir: "../outside.git",
-      workTree: "../outside",
-    }]
-
-    expect(() => validateGitCommits(inv, defaultConfig, "git --git-dir ../outside.git commit --amend --no-edit")).toThrow(
-      'git commit --amend -s -m "kernel: fix race"',
-    )
-  })
-
-  test("rejects ambiguous home paths for no-edit amendments", () => {
-    const inv = [{
-      ...invocation([], false, [], true),
-      hasNoEdit: true,
-      directoryChanges: ["~/repository"],
-    }]
-
-    expect(() => validateGitCommits(
-      inv,
-      defaultConfig,
-      "git -C '~/repository' commit --amend --no-edit",
-    )).toThrow("Provide an explicit inline message")
-  })
-
-  test("rejects external reads for workspace-backed validation", () => {
-    const inv = [{ ...invocation([], false, [], true), hasNoEdit: true }]
-
-    expect(() => validateGitCommits(
-      inv,
-      defaultConfig,
-      "git commit --amend --no-edit",
-    )).toThrow("Provide an explicit inline message")
-  })
-
   test("validates amend commits when new message is provided", () => {
     const invalidAmend = [invocation(["Missing scope on amend"], true, [], true)]
     expect(() => validateGitCommits(invalidAmend, defaultConfig, "git commit --amend -m ...")).toThrow(

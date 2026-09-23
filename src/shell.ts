@@ -40,11 +40,6 @@ interface CommandSubstitution {
   readonly end: number
 }
 
-interface CommandStart {
-  readonly index: number
-  readonly directoryChanges: readonly string[]
-}
-
 function isWordSeparator(character: string): boolean {
   return (
     character === " " ||
@@ -161,6 +156,25 @@ function pushWord(
   }
 }
 
+function heredocSubstitutions(body: string): string[] {
+  const substitutions: string[] = []
+
+  for (let i = 0; i < body.length; i++) {
+    if (body[i] === "\\" && (body[i + 1] === "$" || body[i + 1] === "`")) {
+      i++
+    } else if (body[i] === "`") {
+      throw new Error("Cannot validate command substitutions in an unquoted heredoc. Quote the delimiter, for example: <<'EOF'.")
+    } else if (body[i] === "$" && body[i + 1] === "(") {
+      const substitution = consumeCommandSubstitution(body, i)
+
+      substitutions.push(substitution.content)
+      i = substitution.end - 1
+    }
+  }
+
+  return substitutions
+}
+
 export function tokenizeShell(command: string): ShellToken[] {
   const tokens: ShellToken[] = []
   const pendingHeredocs: { index: number; delimiter: string; quoted: boolean }[] = []
@@ -226,19 +240,21 @@ export function tokenizeShell(command: string): ShellToken[] {
 
             if (line === heredoc.delimiter) {
               complete = true
+              const body = command.slice(bodyStart, i - (line.length + (lineEnd < 0 ? 0 : 1)))
+
               tokens[heredoc.index] = {
                 ...tokens[heredoc.index]!,
-                heredoc: { body: command.slice(bodyStart, i - (line.length + (lineEnd < 0 ? 0 : 1))), quoted: heredoc.quoted, complete },
+                heredoc: { body, quoted: heredoc.quoted },
+                substitutions: heredoc.quoted
+                  ? undefined
+                  : heredocSubstitutions(body),
               }
               break
             }
           }
 
           if (!complete) {
-            tokens[heredoc.index] = {
-              ...tokens[heredoc.index]!,
-              heredoc: { body: command.slice(bodyStart), quoted: heredoc.quoted, complete },
-            }
+            throw new Error("Cannot validate an incomplete heredoc. Close its delimiter on a separate line before running the command.")
           }
         }
 
@@ -260,6 +276,7 @@ export function tokenizeShell(command: string): ShellToken[] {
 
     let value = ""
     let quoted = false
+    let unsupportedDelimiter = false
     const substitutions: string[] = []
 
     while (i < command.length) {
@@ -288,6 +305,7 @@ export function tokenizeShell(command: string): ShellToken[] {
 
       if (current === "$" && command[i + 1] === "'") {
         quoted = true
+        unsupportedDelimiter = true
         i += 2
 
         while (i < command.length) {
@@ -388,6 +406,10 @@ export function tokenizeShell(command: string): ShellToken[] {
     pushWord(tokens, value, substitutions)
 
     if (pendingDelimiter !== undefined) {
+      if (unsupportedDelimiter) {
+        throw new Error("Cannot validate an ANSI-C quoted heredoc delimiter. Use a plain quoted delimiter such as <<'EOF'.")
+      }
+
       pendingHeredocs.push({ index: pendingDelimiter, delimiter: value, quoted })
       pendingDelimiter = undefined
     }
@@ -405,10 +427,12 @@ function splitSimpleCommands(tokens: readonly ShellToken[]): { tokens: ShellToke
     if (token.type === "operator") {
       const isPipeline = token.value === "|" || token.value === "|&"
 
-      if (current.length > 0) commands.push({ tokens: current, pipeline: precedingPipeline || isPipeline })
+      const hasCommand = current.length > 0
+
+      if (hasCommand) commands.push({ tokens: current, pipeline: precedingPipeline || isPipeline })
       current = []
 
-      if (token.value !== "\n" || !precedingPipeline) precedingPipeline = isPipeline
+      if (hasCommand || token.value !== "\n") precedingPipeline = isPipeline
     } else {
       current.push(token)
     }
@@ -456,9 +480,8 @@ function skipAssignments(words: readonly string[], start: number): number {
   return index
 }
 
-function findCommandStart(words: readonly string[]): CommandStart {
+function findCommandStart(words: readonly string[]): number {
   let index = skipAssignments(words, 0)
-  const directoryChanges: string[] = []
 
   while (index < words.length) {
     const word = words[index]
@@ -484,18 +507,8 @@ function findCommandStart(words: readonly string[]): CommandStart {
         if (argument === "-u" || argument === "--unset") {
           index += 2
         } else if (argument === "-C" || argument === "--chdir") {
-          const directory = words[index + 1]
-
-          if (directory !== undefined) {
-            directoryChanges.push(directory)
-          }
-
           index += 2
-        } else if (argument.startsWith("--chdir=")) {
-          directoryChanges.push(argument.slice("--chdir=".length))
-          index++
-        } else if (/^-C.+/.test(argument)) {
-          directoryChanges.push(argument.slice(2))
+        } else if (argument.startsWith("--chdir=") || /^-C.+/.test(argument)) {
           index++
         } else if (argument.startsWith("--unset=") || /^-u.+/.test(argument)) {
           index++
@@ -543,22 +556,18 @@ function findCommandStart(words: readonly string[]): CommandStart {
     break
   }
 
-  return { index, directoryChanges }
+  return index
 }
 
 function extractInvocation(
   words: readonly string[],
-  commandStart: CommandStart,
+  commandStart: number,
 ): GitCommitInvocation | undefined {
-  let wordIndex = commandStart.index
+  let wordIndex = commandStart
   const executable = words[wordIndex]
 
   if (executable === undefined || (executable !== "git" && !executable.endsWith("/git"))) return undefined
   wordIndex++
-  const directoryChanges = [...commandStart.directoryChanges]
-  let gitDir: string | undefined
-  let workTree: string | undefined
-
   let subcommand: string | undefined
 
   while (wordIndex < words.length) {
@@ -573,33 +582,13 @@ function extractInvocation(
     }
 
     if (gitGlobalOptionsWithArg.has(argument)) {
-      const optionValue = words[wordIndex + 1]
-
-      if (argument === "-C" && optionValue !== undefined) {
-        directoryChanges.push(optionValue)
-      } else if (argument === "--git-dir" && optionValue !== undefined) {
-        gitDir = optionValue
-      } else if (argument === "--work-tree" && optionValue !== undefined) {
-        workTree = optionValue
-      }
-
       wordIndex += 2
       continue
     }
 
-    if (argument.startsWith("--git-dir=")) {
-      gitDir = argument.slice("--git-dir=".length)
-      wordIndex++
-      continue
-    }
-
-    if (argument.startsWith("--work-tree=")) {
-      workTree = argument.slice("--work-tree=".length)
-      wordIndex++
-      continue
-    }
-
     if (
+      argument.startsWith("--git-dir=") ||
+      argument.startsWith("--work-tree=") ||
       argument.startsWith("--namespace=") ||
       argument.startsWith("--exec-path=") ||
       argument.startsWith("--super-prefix=") ||
@@ -610,7 +599,6 @@ function extractInvocation(
     }
 
     if (argument.startsWith("-C")) {
-      directoryChanges.push(argument.slice(2))
       wordIndex++
       continue
     }
@@ -723,9 +711,6 @@ function extractInvocation(
     hasNoEdit,
     isFixup,
     isHelp,
-    directoryChanges,
-    gitDir,
-    workTree,
   }
 }
 
@@ -747,9 +732,13 @@ export function extractGitCommits(command: string): GitCommitInvocation[] {
 
       const heredocs = commandTokens.filter((token) => token.type === "redirect" && /^\d*<<$/.test(token.value))
 
-      const stdinRedirects = commandTokens.filter((token) =>
-        token.type === "redirect" && /^(?:0)?</.test(token.value)
-      )
+      const stdinRedirects = commandTokens.filter((token) => {
+        if (token.type !== "redirect") return false
+
+        const match = token.value.match(/^(\d*)([<>])/)
+
+        return match !== null && (match[1] === "" ? match[2] === "<" : Number(match[1]) === 0)
+      })
 
       const heredoc = heredocs[0]
       let stdinError: string | undefined
@@ -757,7 +746,7 @@ export function extractGitCommits(command: string): GitCommitInvocation[] {
       if (simple.pipeline) stdinError = "Pipelines cannot supply a validated commit message."
       else if (heredocs.length !== 1 || stdinRedirects.length !== 1 || heredoc?.value !== "<<" && heredoc?.value !== "0<<") {
         stdinError = "Use exactly one quoted stdin heredoc on git commit -F -, with no other stdin redirects."
-      } else if (heredoc.heredoc?.quoted !== true || heredoc.heredoc.complete !== true) {
+      } else if (heredoc.heredoc?.quoted !== true) {
         stdinError = "Use a complete quoted heredoc delimiter, for example: git commit -s -F - <<'EOF'."
       }
 

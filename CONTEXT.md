@@ -29,11 +29,11 @@ export interface CommitGuardConfig {
 export interface GitCommitInvocation {
   readonly messages: readonly string[]
   readonly filePaths: readonly string[]
+  readonly stdinMessage?: string
+  readonly stdinError?: string
   readonly hasSignoffFlag: boolean
   readonly isAmend: boolean
   readonly isHelp: boolean
-  readonly gitDir?: string
-  readonly workTree?: string
 }
 ```
 
@@ -42,7 +42,7 @@ export interface GitCommitInvocation {
 - `hasSignoffFlag`: `true` when `-s` or `--signoff` was passed; `false` when omitted or explicitly overridden by `--no-signoff`.
 - `isAmend`: `true` when `--amend` was passed.
 - `isHelp`: `true` when `-h` or `--help` was passed.
-- `gitDir` and `workTree`: Preserve explicit repository selectors so validation can reject unsafe external HEAD lookups.
+- `stdinMessage` and `stdinError`: Hold a validated quoted heredoc body or an actionable stdin-input rejection.
 
 ### Diagnostics
 
@@ -98,13 +98,13 @@ The validation engine (`src/validator.ts`) enforces commit format invariants.
 ### 1. Message assembly
 
 - If multiple `-m` options are given, their values are joined with double newlines (`\n\n`) as separate paragraphs.
-- File and standard-input references (`-F <file>`, `--file`) are rejected before shell execution.
+- File-backed references (`-F <file>`, `--file=<file>`) are rejected before shell execution.
+- One complete, quoted heredoc attached directly to descriptor 0 of `git commit -F -` supplies a literal message.
+- Pipelines, multiple heredocs, inherited compound-command input, nonzero descriptors, competing stdin redirects, and unquoted delimiters are rejected for `-F -`.
 - The plugin never reads `-F` or `--file` message files because the pre-execution hook has no permission-checked file access boundary.
 - If no message is provided and `--amend` is not present, the invocation is rejected.
-- If `--amend` is present with no new message (`git commit --amend --no-edit`), validation passes.
-- No-edit amendments with `--git-dir` or `--work-tree` are rejected unless they provide an inline message.
-- Workspace-backed locations validate inline messages lexically but reject no-edit amendments that require a remote repository read.
-- No-edit amendments reject shell directory changes beginning with `~` because tokenization cannot safely distinguish quoted literal paths from shell-expanded paths.
+- `git commit --amend --no-edit` without an explicit inline message is rejected in every repository location.
+- Explicit amendment messages are validated without reading repository history.
 
 ### 2. Rule evaluation
 
@@ -136,9 +136,7 @@ The plugin (`src/plugin.ts`) wires the validation engine to OpenCode's tool exec
 - Hook: `ctx.tool.hook("execute.before")` with an Effect callback.
 - Checks if `event.tool` is `"shell"` or `"bash"`.
 - Extracts `command` from `event.input`.
-- Resolves a relative shell `workdir` from the session directory, expands `~`, and normalizes Windows shell paths with OpenCode-compatible rules.
-- Uses `location.workspaceID` to prevent local host reads for repositories that execute in remote workspaces.
-- Returns immediately if the command does not contain `"commit"`.
+- Does not read repository history or message files before the shell permission check.
 - Runs `extractGitCommits(command)` and validates all found invocations.
 - Validation failures use the typed `Tool.Error` failure channel so parallel calls settle independently without becoming Effect defects.
 

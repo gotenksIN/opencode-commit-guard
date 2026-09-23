@@ -41,7 +41,7 @@ export interface ShellToken {
   readonly type: ShellTokenType
   readonly value: string
   readonly substitutions?: readonly string[]
-  readonly heredoc?: { readonly body: string; readonly quoted: boolean; readonly complete: boolean }
+  readonly heredoc?: { readonly body: string; readonly quoted: boolean }
 }
 
 export interface GitCommitInvocation {
@@ -54,9 +54,6 @@ export interface GitCommitInvocation {
   readonly hasNoEdit?: boolean
   readonly isFixup?: boolean
   readonly isHelp: boolean
-  readonly directoryChanges?: readonly string[]
-  readonly gitDir?: string
-  readonly workTree?: string
 }
 
 export interface OverlongLine {

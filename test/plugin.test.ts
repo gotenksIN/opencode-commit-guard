@@ -1,18 +1,8 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { Tool } from "@opencode/schema/tool"
 import { Effect } from "effect"
-import { spawnSync } from "node:child_process"
-import { mkdirSync, rmSync } from "node:fs"
-import { join } from "node:path"
 import plugin from "../index.js"
 import type { JsonValue } from "../src/types.js"
-
-const testDir = join(import.meta.dir, ".plugin-tmp")
-
-afterEach(() => {
-  rmSync(testDir, { recursive: true, force: true })
-  delete process.env.OPENCODE_TEST_HOME
-})
 
 interface HookEvent {
   tool: string
@@ -55,34 +45,6 @@ async function setupTestPlugin(
       }
     },
   }
-}
-
-function runGit(args: readonly string[], directory = testDir): void {
-  const result = spawnSync("git", args, {
-    cwd: directory,
-    encoding: "utf-8",
-    stdio: ["ignore", "pipe", "pipe"],
-  })
-
-  if (result.status !== 0) {
-    throw new Error(`Git test setup failed: ${result.stderr}`)
-  }
-}
-
-function initializeRepository(message: string, directory = testDir): void {
-  mkdirSync(directory, { recursive: true })
-  runGit(["init", "--quiet"], directory)
-  runGit([
-    "-c",
-    "user.name=Test User",
-    "-c",
-    "user.email=test@example.com",
-    "commit",
-    "--allow-empty",
-    "--no-gpg-sign",
-    "-m",
-    message,
-  ], directory)
 }
 
 describe("opencode-commit-guard plugin", () => {
@@ -145,8 +107,7 @@ describe("opencode-commit-guard plugin", () => {
   })
 
   test("rejects an amendment without an explicit message", async () => {
-    initializeRepository("kernel: valid existing message\n\nSigned-off-by: Test User <test@example.com>")
-    const harness = await setupTestPlugin({}, testDir)
+    const harness = await setupTestPlugin()
     await expect(
       harness.executeBefore("shell", { command: "git commit --amend --no-edit" }),
     ).rejects.toThrow("Provide an explicit inline message")
@@ -163,8 +124,7 @@ describe("opencode-commit-guard plugin", () => {
   })
 
   test("avoids local repository reads for workspace-backed locations", async () => {
-    initializeRepository("Invalid local host message")
-    const harness = await setupTestPlugin({}, testDir, "workspace-1")
+    const harness = await setupTestPlugin({}, import.meta.dir, "workspace-1")
 
     await expect(
       harness.executeBefore("shell", { command: "git commit --amend --no-edit" }),
@@ -178,10 +138,7 @@ describe("opencode-commit-guard plugin", () => {
   })
 
   test("rejects no-edit amendments with a relative shell workdir", async () => {
-    const sessionDirectory = join(testDir, "session")
-    const repositoryDirectory = join(sessionDirectory, "nested")
-    initializeRepository("kernel: valid existing message\n\nSigned-off-by: Test User <test@example.com>", repositoryDirectory)
-    const harness = await setupTestPlugin({}, sessionDirectory)
+    const harness = await setupTestPlugin()
 
     await expect(
       harness.executeBefore("shell", {
@@ -192,7 +149,7 @@ describe("opencode-commit-guard plugin", () => {
   })
 
   test("rejects ambiguous home directory changes for no-edit amendments", async () => {
-    const harness = await setupTestPlugin({}, testDir)
+    const harness = await setupTestPlugin()
 
     await expect(
       harness.executeBefore("shell", {
@@ -202,9 +159,7 @@ describe("opencode-commit-guard plugin", () => {
   })
 
   test("rejects no-edit amendments with a home shell workdir", async () => {
-    process.env.OPENCODE_TEST_HOME = testDir
-    initializeRepository("kernel: valid existing message\n\nSigned-off-by: Test User <test@example.com>")
-    const harness = await setupTestPlugin({}, join(testDir, "session"))
+    const harness = await setupTestPlugin()
 
     await expect(
       harness.executeBefore("shell", {

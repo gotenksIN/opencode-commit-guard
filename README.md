@@ -94,16 +94,22 @@ You can provide this either via flags or directly in the message body:
 
 ### 5. Amend commits (`--amend`)
 
-If an agent runs `git commit --amend --no-edit` without supplying a new message, the plugin permits execution.
-If the agent provides a new message with `-m`, the plugin validates the new message.
-No-edit amendments that use `--git-dir` or `--work-tree` must provide a new inline message because the plugin cannot inspect repositories selected outside OpenCode's shell permissions.
-In workspace-backed sessions, no-edit amendments must also provide a new inline message because the repository exists in the remote workspace, not on the plugin host.
-No-edit amendments with `git -C` or `env -C` paths that start with `~` must provide an inline message because shell quoting changes their meaning.
+Provide an explicit inline message with `-m` when you amend a commit.
+The plugin rejects `git commit --amend --no-edit` without a message because reading the existing message would bypass shell permission checks.
+The plugin validates explicit amendment messages in all repository locations.
 
 ### Message input
 
-Provide commit messages inline with `-m` or `--message`.
-The plugin rejects `-F`, `--file`, and standard-input message sources because the pre-execution hook cannot read them through OpenCode's file permissions.
+Provide commit messages inline with `-m` or `--message`, or use one quoted heredoc directly on standard input:
+
+```bash
+git commit -s -F - <<'EOF'
+kernel: fix race
+EOF
+```
+
+The plugin rejects file-backed `-F` or `--file` messages without reading the files.
+It also rejects unquoted or ambiguous standard-input sources.
 
 ## Development
 

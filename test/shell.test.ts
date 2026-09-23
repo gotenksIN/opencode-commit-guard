@@ -221,17 +221,14 @@ describe("extractGitCommits", () => {
     const invocations = extractGitCommits('git -C /path/to/repo commit -m "fs: fix leak" -s')
     expect(invocations).toHaveLength(1)
     expect(invocations[0]?.messages).toEqual(["fs: fix leak"])
-    expect(invocations[0]?.directoryChanges).toEqual(["/path/to/repo"])
 
     const dirFlag = extractGitCommits('git --git-dir=/repo/.git --work-tree=/repo commit -m "fs: fix leak" -s')
     expect(dirFlag).toHaveLength(1)
     expect(dirFlag[0]?.messages).toEqual(["fs: fix leak"])
-    expect(dirFlag[0]?.gitDir).toBe("/repo/.git")
-    expect(dirFlag[0]?.workTree).toBe("/repo")
 
     const separate = extractGitCommits('git --git-dir .git --work-tree . commit --amend --no-edit')
-    expect(separate[0]?.gitDir).toBe(".git")
-    expect(separate[0]?.workTree).toBe(".")
+    expect(separate).toHaveLength(1)
+    expect(separate[0]?.isAmend).toBe(true)
   })
 
   test("ignores non-commit git subcommands", () => {
