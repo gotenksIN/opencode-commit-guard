@@ -21,15 +21,15 @@
     "prepack": "bun run build"
   },
   "dependencies": {
-    "@opencode/plugin": "2.0.3",
-    "@opencode/schema": "2.0.3",
+    "@opencode/plugin": "2.0.15",
+    "@opencode/schema": "2.0.15",
     "effect": "4.0.0-rc.112"
   },
   "devDependencies": {
-    "@oxlint/plugins": "1.83.0",
-    "@types/bun": "latest",
-    "oxlint": "1.83.0",
-    "typescript": "latest"
+    "@oxlint/plugins": "1.85.0",
+    "@types/bun": "1.4.2",
+    "oxlint": "1.85.0",
+    "typescript": "7.0.2"
   },
   "engines": {
     "bun": ">=1.2.0"
