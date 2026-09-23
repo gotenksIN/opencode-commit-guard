@@ -71,14 +71,17 @@ export function counter(ctx: Context, scope: string): Effect.Effect<number> {
   return Effect.gen(function*() {
     const value = yield* ctx.storage.get(counterKey(scope))
 
-    return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : 0
+    if (value === undefined) return 0
+
+    return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : -1
   })
 }
 
 export function invalidate(ctx: Context, scope: string): Effect.Effect<void> {
   return Effect.gen(function*() {
     const previous = yield* counter(ctx, scope)
-    yield* ctx.storage.set(counterKey(scope), previous + 1)
+
+    yield* ctx.storage.set(counterKey(scope), previous < 0 ? 1 : previous + 1)
   })
 }
 
@@ -97,6 +100,8 @@ function validBaseline(value: JsonValue | undefined): value is Baseline & Record
 export function load(ctx: Context, scope: string): Effect.Effect<Baseline | undefined> {
   return Effect.gen(function*() {
     const current = yield* counter(ctx, scope)
+
+    if (current < 0) return undefined
     let after: string | undefined
     let newest: { sequence: string; baseline: Baseline } | undefined
 

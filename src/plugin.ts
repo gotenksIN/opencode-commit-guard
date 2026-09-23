@@ -2,7 +2,7 @@ import { Plugin } from "@opencode/plugin/effect"
 import { Tool } from "@opencode/schema/tool"
 import { Effect } from "effect"
 import { randomUUID } from "node:crypto"
-import { cleanup, createPending, importCapture, invalidate, publish, scopeFor, counter } from "./capture.js"
+import { cleanup, createPending, importCapture, invalidate, publish, scopeFor, counter, load } from "./capture.js"
 import type { Pending } from "./capture.js"
 import { parseConfig } from "./config.js"
 import { extractGitCommits } from "./shell.js"
@@ -36,11 +36,21 @@ export const plugin = Plugin.define({
       input: { type: "object", properties: { refresh: { type: "boolean" } }, additionalProperties: false },
       execute: (input, toolContext) => Effect.gen(function*() {
         if (ctx.location.workspaceID !== undefined) return { content: "Commit context capture is unavailable for remote workspaces." }
+
+        const session = yield* ctx.session.get({ sessionID: toolContext.sessionID })
+
+        if (session.location.directory !== ctx.location.directory || session.location.workspaceID !== ctx.location.workspaceID) {
+          return { content: "The session moved to another worktree. Call commit_context from its new location." }
+        }
+
         const scope = scopeFor(ctx, toolContext.sessionID, config)
         const previous = pending.get(scope)
 
         if (previous !== undefined) {
-          if (Date.now() < previous.expires) return { content: `Run this shell command with workdir ${ctx.location.directory} and background:false, then call commit_context again:\n${previous.command}` }
+          // SAFETY: The tool input schema permits only a refresh boolean.
+          const refreshing = input as { refresh?: boolean }
+
+          if (Date.now() < previous.expires && refreshing.refresh !== true) return { content: `Run this shell command with workdir ${ctx.location.directory} and background:false, then call commit_context again:\n${previous.command}` }
           pending.delete(scope)
           cleanup(previous)
           yield* invalidate(ctx, scope)
@@ -49,13 +59,34 @@ export const plugin = Plugin.define({
         // SAFETY: The tool input schema permits only a refresh boolean.
         const request = input as { refresh?: boolean }
 
+        if (request.refresh !== true) {
+          const baseline = yield* load(ctx, scope)
+
+          if (baseline !== undefined && baseline.directory === ctx.location.directory && baseline.gpgsign !== "error" && baseline.signingkey !== "error") {
+            const observed = [...new Set(baseline.messages.map((message) => message.split("\n")[0]?.match(/^([a-zA-Z0-9_./-]{1,40}): /)?.[1]).filter((value) => value !== undefined))].slice(0, 3)
+            const examples = observed.length > 0 ? `Observed scope examples (not an allowlist): ${observed.join(", ")}.\n` : ""
+
+            const scopes = config.allowedScopes === undefined ? "No configured scope allowlist." :
+              `Configured scope allowlist: ${config.allowedScopes.join(", ").slice(0, 512)}.`
+
+            return { content: `Frozen commit baseline for ${ctx.location.directory}.\n` +
+              `Use <scope>: <subject>${config.requireScope ? " (required)" : " (optional)"}; maximum line length: ${config.maxLineLength || "unlimited"}.\n` +
+              `${scopes}\n${examples}` +
+              `Effective commit.gpgsign: ${baseline.gpgsign}. Signoff ${baseline.gpgsign === "true" ? "required" : "not required"}; ` +
+              `signoff is not a cryptographic signature. user.signingkey: ${baseline.signingkey === null ? "unset" : "configured"}.\n` +
+              "Set refresh:true after a branch switch, changed signing settings, or changed commit instructions." }
+          }
+        }
+
         if (request.refresh === true) yield* invalidate(ctx, scope)
         const count = yield* counter(ctx, scope)
         const attempt = yield* Effect.sync(() => createPending(scope, toolContext.sessionID, toolContext.agent, count))
         pending.set(scope, attempt)
 
         return { content: `Run this shell command with workdir ${ctx.location.directory} and background:false, then call commit_context again:\n${attempt.command}` }
-      }),
+      }).pipe(Effect.mapError(() => new Tool.Error({
+        message: "[commit-guard] Could not access the session or commit context. Call commit_context again from this checkout.",
+      }))),
     }))
 
     yield* ctx.tool.hook("execute.before", (event) => Effect.try({
