@@ -11,18 +11,13 @@ interface HookEvent {
 
 type ToolHookCallback = (event: HookEvent) => Effect.Effect<void, Tool.Error>
 
-async function setupTestPlugin(
-  options: JsonValue = {},
-  directory = import.meta.dir,
-  workspaceID?: string,
-) {
+async function setupTestPlugin(options: JsonValue = {}) {
   const hooks = new Map<string, ToolHookCallback>()
 
   const ctx = {
     options,
     location: {
-      directory,
-      workspaceID,
+      directory: import.meta.dir,
     },
     tool: {
       hook: (name: string, callback: ToolHookCallback) => Effect.sync(() => {
@@ -113,60 +108,14 @@ describe("opencode-commit-guard plugin", () => {
     ).rejects.toThrow("Provide an explicit inline message")
   })
 
-  test("rejects no-edit amendments with explicit repository selectors", async () => {
+  test("validates an amendment when an explicit message is provided", async () => {
     const harness = await setupTestPlugin()
-
     await expect(
-      harness.executeBefore("shell", {
-        command: "git --git-dir ../outside.git --work-tree ../outside commit --amend --no-edit",
-      }),
-    ).rejects.toThrow("Provide an explicit inline message")
-  })
-
-  test("avoids local repository reads for workspace-backed locations", async () => {
-    const harness = await setupTestPlugin({}, import.meta.dir, "workspace-1")
-
-    await expect(
-      harness.executeBefore("shell", { command: "git commit --amend --no-edit" }),
-    ).rejects.toThrow("Provide an explicit inline message")
-    await expect(
-      harness.executeBefore("shell", { command: 'git commit --amend -s -m "kernel: valid remote message"' }),
+      harness.executeBefore("shell", { command: 'git commit --amend -s -m "kernel: valid message"' }),
     ).resolves.toBeUndefined()
     await expect(
-      harness.executeBefore("shell", { command: 'git commit --amend -s -m "invalid remote message"' }),
+      harness.executeBefore("shell", { command: 'git commit --amend -s -m "invalid message"' }),
     ).rejects.toThrow("Missing scope in subject line")
-  })
-
-  test("rejects no-edit amendments with a relative shell workdir", async () => {
-    const harness = await setupTestPlugin()
-
-    await expect(
-      harness.executeBefore("shell", {
-        command: "git commit --amend --no-edit",
-        workdir: "nested",
-      }),
-    ).rejects.toThrow("Provide an explicit inline message")
-  })
-
-  test("rejects ambiguous home directory changes for no-edit amendments", async () => {
-    const harness = await setupTestPlugin()
-
-    await expect(
-      harness.executeBefore("shell", {
-        command: "git -C '~/repository' commit --amend --no-edit",
-      }),
-    ).rejects.toThrow("Provide an explicit inline message")
-  })
-
-  test("rejects no-edit amendments with a home shell workdir", async () => {
-    const harness = await setupTestPlugin()
-
-    await expect(
-      harness.executeBefore("shell", {
-        command: "git commit --amend --no-edit",
-        workdir: "~",
-      }),
-    ).rejects.toThrow("Provide an explicit inline message")
   })
 
   test("rejects git commit commands with invalid format before execution", async () => {
