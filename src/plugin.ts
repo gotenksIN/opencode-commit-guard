@@ -2,7 +2,7 @@ import { Plugin } from "@opencode/plugin/effect"
 import { Tool } from "@opencode/schema/tool"
 import { Effect } from "effect"
 import { randomUUID } from "node:crypto"
-import { cleanup, createPending, importCapture, invalidate, publish, scopeFor, counter, load } from "./capture.js"
+import { captureTimeout, cleanup, createPending, importCapture, invalidate, publish, scopeFor, counter, load } from "./capture.js"
 import type { Pending } from "./capture.js"
 import { parseConfig } from "./config.js"
 import { extractGitCommits } from "./shell.js"
@@ -93,6 +93,14 @@ export const plugin = Plugin.define({
       }))),
     }))
 
+    yield* ctx.shell.hook("create.before", (event) => Effect.sync(() => {
+      for (const attempt of pending.values()) {
+        if (attempt.claimed !== undefined && event.command === attempt.command && event.cwd === attempt.workdir) {
+          attempt.expires = Date.now() + captureTimeout
+        }
+      }
+    }))
+
     yield* ctx.tool.hook("execute.before", (event) => Effect.gen(function*() {
       const parsed = yield* Effect.try({
         try: () => {
@@ -123,6 +131,7 @@ export const plugin = Plugin.define({
           }
 
           attempt.claimed = { messageID: event.messageID, id: event.id }
+          attempt.expires = Date.now() + captureTimeout
 
           return
         }
@@ -186,16 +195,16 @@ export const plugin = Plugin.define({
         // SAFETY: Tool result metadata is untrusted JSON; checked fields below are optional.
         const metadata = event.result.metadata as JsonValue | undefined
 
-        if (isRecord(metadata)) {
-          const info = isRecord(metadata["shell"]) ? metadata["shell"] : metadata
+        if (!isRecord(metadata)) return
 
-          if ((info["status"] !== undefined || info["exit"] !== undefined) && (info["status"] !== "exited" || info["exit"] !== 0)) return
+        const info = isRecord(metadata["shell"]) ? metadata["shell"] : metadata
 
-          const output = isRecord(info["output"]) ? info["output"] : isRecord(metadata["output"]) ? metadata["output"] : metadata
+        if (info["status"] !== "exited" || info["exit"] !== 0) return
 
-          if (output["truncated"] === true || info["truncated"] === true || metadata["truncated"] === true ||
-            isRecord(metadata["output"]) && metadata["output"]["truncated"] === true) return
-        }
+        const output = isRecord(info["output"]) ? info["output"] : isRecord(metadata["output"]) ? metadata["output"] : metadata
+
+        if (output["truncated"] === true || info["truncated"] === true || metadata["truncated"] === true ||
+          isRecord(metadata["output"]) && metadata["output"]["truncated"] === true) return
 
         const session = yield* Effect.orElseSucceed(ctx.session.get({ sessionID: event.sessionID }), () => undefined)
 

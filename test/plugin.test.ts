@@ -2,6 +2,9 @@ import { describe, expect, test } from "bun:test"
 import { Tool } from "@opencode/schema/tool"
 import { Effect } from "effect"
 import { createHash } from "node:crypto"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import plugin from "../index.js"
 import { scopeFor } from "../src/capture.js"
 import { parseConfig } from "../src/config.js"
@@ -14,20 +17,34 @@ interface HookEvent {
 
 type ToolHookCallback = (event: HookEvent) => Effect.Effect<void, Tool.Error>
 
-async function setupTestPlugin(options: JsonValue = {}, signing: "true" | "false" | "missing" = "true") {
+async function setupTestPlugin(options: JsonValue = {}, signing: "true" | "false" | "missing" = "true", directory = import.meta.dir) {
   const hooks = new Map<string, ToolHookCallback>()
+  const shellHooks = new Map<string, (event: { command: string; cwd: string }) => Effect.Effect<void>>()
+  const tools = new Map<string, Tool.Info>()
+  const stored = new Map<string, JsonValue>()
 
   const ctx = {
     options,
     location: {
-      directory: import.meta.dir,
+      directory,
       project: { id: "test-project" },
     },
     session: {
-      get: () => Effect.succeed({ location: { directory: import.meta.dir } }),
+      get: () => Effect.succeed({ location: { directory } }),
+    },
+    shell: {
+      hook: (name: string, callback: (event: { command: string; cwd: string }) => Effect.Effect<void>) => Effect.sync(() => {
+        shellHooks.set(name, callback)
+
+        return { dispose: Effect.void }
+      }),
     },
     tool: {
-      transform: () => Effect.succeed({ dispose: Effect.void }),
+      transform: (callback: (editor: { add: (definition: Tool.Info) => void }) => void) => Effect.sync(() => {
+        callback({ add: (definition) => { tools.set(definition.name, definition) } })
+
+        return { dispose: Effect.void }
+      }),
       hook: (name: string, callback: ToolHookCallback) => Effect.sync(() => {
         hooks.set(name, callback)
 
@@ -35,15 +52,18 @@ async function setupTestPlugin(options: JsonValue = {}, signing: "true" | "false
       }),
     },
     storage: {
-      get: () => Effect.succeed(undefined),
-      set: () => Effect.void,
-      scan: () => {
-        if (signing === "missing") return Effect.succeed({ entries: [] })
+      get: (key: string) => Effect.succeed(stored.get(key)),
+      set: (key: string, value: JsonValue) => Effect.sync(() => { stored.set(key, value) }),
+      remove: (key: string) => Effect.sync(() => { stored.delete(key) }),
+      scan: ({ prefix }: { prefix: string }) => {
+        if (signing === "missing" || !prefix.startsWith("snap/")) {
+          return Effect.succeed({ entries: [...stored].flatMap(([key, value]) => key.startsWith(prefix) ? [{ key, value }] : []) })
+        }
 
         // SAFETY: The harness provides the location fields used by scopeFor.
         const scope = scopeFor(ctx as never, "test-session", parseConfig(options))
 
-        const baseline = { directory: import.meta.dir, workdir: import.meta.dir, gitDir: `${import.meta.dir}/.git`, commonDir: `${import.meta.dir}/.git`,
+        const baseline = { directory, workdir: directory, gitDir: `${directory}/.git`, commonDir: `${directory}/.git`,
           branch: "main", head: null, messages: [], gpgsign: signing, signingkey: null }
 
         const generation = "test-generation"
@@ -68,6 +88,56 @@ async function setupTestPlugin(options: JsonValue = {}, signing: "true" | "false
         // SAFETY: The stub supplies the tool-call identity fields expected by the hook.
         await Effect.runPromise(hook({ tool, input, sessionID: "test-session", agent: "build", messageID: "message", id: "call" } as never))
       }
+    },
+    prepareCapture: async (onPrepared?: () => void) => {
+      const definition = tools.get("commit_context")
+
+      if (definition === undefined) throw new Error("Commit context tool is unavailable")
+
+      // SAFETY: The stub supplies the tool-call identity fields expected by the tool.
+      const result = await Effect.runPromise(definition.execute({}, {
+        sessionID: "test-session", agent: "build", messageID: "message", id: "capture",
+      } as never))
+
+      const text = result.content
+
+      if (Object.prototype.toString.call(text) !== "[object String]") throw new Error("Capture instructions are not text")
+
+      // SAFETY: The object tag verifies the result content is a string.
+      const command = (text as string).split("\n").slice(1).join("\n")
+
+      onPrepared?.()
+
+      const hook = hooks.get("execute.before")
+
+      if (hook === undefined) throw new Error("Capture admission hook is unavailable")
+
+      // SAFETY: The stub supplies the shell input and identity fields expected by the hook.
+      await Effect.runPromise(hook({
+        tool: "shell", input: { command, workdir: directory },
+        sessionID: "test-session", agent: "build", messageID: "message", id: "capture",
+      } as never))
+
+      return command
+    },
+    completeCapture: async (command: string, metadata?: JsonValue) => {
+      const hook = hooks.get("execute.after")
+
+      if (hook === undefined) throw new Error("Capture completion hook is unavailable")
+
+      // SAFETY: The stub supplies the shell result and tool-call identity fields expected by the hook.
+      await Effect.runPromise(hook({
+        tool: "shell", input: { command, workdir: directory },
+        sessionID: "test-session", agent: "build", messageID: "message", id: "capture",
+        status: "completed", result: { metadata },
+      } as never))
+    },
+    startCapture: async (command: string) => {
+      const hook = shellHooks.get("create.before")
+
+      if (hook === undefined) throw new Error("Shell creation hook is unavailable")
+
+      await Effect.runPromise(hook({ command, cwd: directory }))
     },
   }
 }
@@ -136,6 +206,89 @@ describe("opencode-commit-guard plugin", () => {
     await expect(
       harness.executeBefore("shell", { command: "git commit --amend --no-edit" }),
     ).resolves.toBeUndefined()
+  })
+
+  test("publishes a capture only after a verified foreground exit", async () => {
+    const accepted = { status: "exited", exit: 0 }
+
+    for (const metadata of [undefined, {}, { status: "running" }, { status: "exited", exit: 1 },
+      accepted]) {
+      const harness = await setupTestPlugin({}, "missing")
+      const command = await harness.prepareCapture()
+      const shell = Bun.spawnSync(["bash", "-c", command], { cwd: import.meta.dir })
+
+      expect(shell.exitCode).toBe(0)
+      expect(shell.stdout.toString()).toBe("RECEIPT_OK\n")
+      await harness.completeCapture(command, metadata)
+
+      const commit = harness.executeBefore("shell", { command: 'git commit -s -m "kernel: valid capture"' })
+
+      if (metadata === accepted) {
+        await expect(commit).resolves.toBeUndefined()
+      } else {
+        await expect(commit).rejects.toThrow("Call commit_context")
+      }
+    }
+  })
+
+  test("keeps the capture alive when permission approval is slow", async () => {
+    const harness = await setupTestPlugin({}, "missing")
+    const actualNow = Date.now
+    let clock = actualNow()
+
+    Date.now = () => clock
+
+    try {
+      const command = await harness.prepareCapture(() => { clock += 15000 })
+      clock += 30000
+      await harness.startCapture(command)
+      const shell = Bun.spawnSync(["bash", "-c", command], { cwd: import.meta.dir })
+
+      expect(shell.exitCode).toBe(0)
+      clock += 6000
+      await harness.completeCapture(command, { status: "exited", exit: 0 })
+      await expect(harness.executeBefore("shell", {
+        command: 'git commit -s -m "kernel: approved capture"',
+      })).resolves.toBeUndefined()
+    } finally {
+      Date.now = actualNow
+    }
+  })
+
+  test("rejects a corrupt reference instead of capturing an unborn HEAD", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "commit-guard-corrupt-"))
+
+    try {
+      const initialized = Bun.spawnSync(["git", "init", "-q", directory])
+
+      expect(initialized.exitCode).toBe(0)
+      const unborn = await setupTestPlugin({}, "missing", directory)
+      const unbornCommand = await unborn.prepareCapture()
+      const unbornShell = Bun.spawnSync(["bash", "-c", unbornCommand], { cwd: directory })
+
+      expect(unbornShell.exitCode).toBe(0)
+      await unborn.completeCapture(unbornCommand, { status: "exited", exit: 0 })
+      await expect(unborn.executeBefore("shell", {
+        command: 'git commit -s -m "kernel: valid unborn checkout"',
+      })).resolves.toBeUndefined()
+
+      const branch = Bun.spawnSync(["git", "-C", directory, "symbolic-ref", "--short", "HEAD"])
+
+      expect(branch.exitCode).toBe(0)
+      writeFileSync(join(directory, ".git", "refs", "heads", branch.stdout.toString().trim()), `${"f".repeat(40)}\n`)
+      const harness = await setupTestPlugin({}, "missing", directory)
+      const command = await harness.prepareCapture()
+      const shell = Bun.spawnSync(["bash", "-c", command], { cwd: directory })
+
+      expect(shell.exitCode).not.toBe(0)
+      expect(shell.stdout.toString()).not.toContain("RECEIPT_OK")
+      await harness.completeCapture(command, { status: "exited", exit: shell.exitCode })
+      await expect(harness.executeBefore("shell", {
+        command: 'git commit -s -m "kernel: reject corrupt HEAD"',
+      })).rejects.toThrow("Call commit_context")
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 
   test("validates an amendment when an explicit message is provided", async () => {
@@ -236,6 +389,16 @@ describe("opencode-commit-guard plugin", () => {
     await expect(
       harness.executeBefore("shell", { command: 'git -C elsewhere commit -m "kernel: wrong target"' }),
     ).rejects.toThrow("Commit target is ambiguous")
+
+    for (const mutation of [
+      "export GIT_DIR=/other/.git", "typeset -x GIT_DIR=/other/.git", "declare -x GIT_DIR=/other/.git",
+      "source ./git-env.sh", ". ./git-env.sh", "eval 'export GIT_DIR=/other/.git'",
+      "set -a; GIT_DIR=/other/.git; GIT_WORK_TREE=/other", "unset GIT_DIR", "readonly GIT_DIR=/other/.git",
+    ]) {
+      await expect(harness.executeBefore("shell", {
+        command: `${mutation}; git commit -m 'kernel: wrong target'`,
+      })).rejects.toThrow("Commit target is ambiguous")
+    }
   })
 
   test("respects requireScope: false option override", async () => {

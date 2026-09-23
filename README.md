@@ -61,6 +61,7 @@ You can also specify custom configuration options:
 Call `commit_context` before your first commit in each session and worktree.
 Run the returned command through the foreground `shell` tool with the indicated workdir.
 Call `commit_context` again to read concise guidance.
+If the shell result lacks a verified successful process exit, capture again instead of using a partial baseline.
 The command writes full historical messages to a private file and prints only a fixed receipt.
 The plugin does not put complete historical messages into tool results or model context.
 Set `refresh: true` after a branch switch, a signing setting change, or a change to commit instructions.
@@ -120,6 +121,7 @@ The plugin does not read or revalidate that message, so a message created outsid
 Provide `-m` when you change the message; the plugin validates the supplied text in the captured checkout.
 Use a direct Git command in that checkout.
 The guard rejects `git -C`, Git directory and worktree flags, Git environment overrides, and directory-changing wrappers because they can select another target.
+The guard also rejects earlier shell environment mutations such as `export`, `typeset`, `declare`, `source`, `.`, `eval`, `set`, and assignment-only commands before a commit.
 
 ### Message input
 

@@ -23,6 +23,11 @@ const commandPrefixes = new Set([
   "while",
 ])
 
+const targetMutators = new Set([
+  "cd", "pushd", "popd", "chdir", "export", "typeset", "declare", "source", ".", "eval",
+  "set", "unset", "readonly", "local", "setenv",
+])
+
 const commitLongOptionsWithArg = new Set([
   "--author",
   "--cleanup",
@@ -741,7 +746,7 @@ export function extractGitCommits(command: string, inheritedDirectoryChange = fa
     const commandStart = findCommandStart(words)
     const invocation = extractInvocation(words, commandStart)
 
-    if (["cd", "pushd", "popd", "chdir", "export"].includes(words[commandStart] ?? "")) changedDirectory = true
+    if (targetMutators.has(words[commandStart] ?? "") || words.length > 0 && words.every(isAssignment)) changedDirectory = true
 
     if (invocation !== undefined) {
       const target = changedDirectory

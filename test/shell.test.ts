@@ -251,6 +251,17 @@ describe("extractGitCommits", () => {
     expect(invocations).toHaveLength(2)
     expect(invocations[0]?.messages).toEqual(["scope1: first"])
     expect(invocations[1]?.messages).toEqual(["scope2: second"])
+
+    for (const mutation of [
+      "export GIT_DIR=/other/.git", "typeset -x GIT_DIR=/other/.git", "declare -x GIT_DIR=/other/.git",
+      "source ./git-env.sh", ". ./git-env.sh", "eval 'export GIT_DIR=/other/.git'",
+      "set -a; GIT_DIR=/other/.git; GIT_WORK_TREE=/other", "unset GIT_DIR", "readonly GIT_DIR=/other/.git",
+    ]) {
+      const changed = extractGitCommits(`${mutation}; git commit -m 'core: Update'`)
+
+      expect(changed).toHaveLength(1)
+      expect(changed[0]?.targetError).toContain("preceding directory or environment change")
+    }
   })
 
   test("handles positional arguments separator --", () => {

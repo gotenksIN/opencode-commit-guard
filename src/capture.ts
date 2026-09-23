@@ -11,7 +11,7 @@ const version = 1
 
 const maxBytes = 262144
 
-const ttl = 20000
+export const captureTimeout = 20000
 
 const policy = "commit-guard-context-v1"
 
@@ -38,7 +38,7 @@ export interface Pending {
   readonly workdir: string
   readonly fd: number
   readonly identity: { dev: number; ino: number; uid: number }
-  readonly expires: number
+  expires: number
   readonly counter: number
   readonly agent: string
   readonly sessionID: string
@@ -135,8 +135,8 @@ field() { "$@" 2>/dev/null | base64 -w0 >> "$out"; printf "\\n" >> "$out"; }
 field git rev-parse --show-toplevel
 field git rev-parse --absolute-git-dir
 field git rev-parse --path-format=absolute --git-common-dir
-if git symbolic-ref -q --short HEAD >/dev/null 2>&1; then printf "branch\\n" >> "$out"; field git symbolic-ref -q --short HEAD; else printf "detached\\n\\n" >> "$out"; fi
-if git rev-parse --verify HEAD >/dev/null 2>&1; then printf "head\\n" >> "$out"; field git rev-parse --verify HEAD; field git log -10 -z --format=%B%x00; else printf "unborn\\n\\n\\n" >> "$out"; fi
+if git symbolic-ref -q --short HEAD >/dev/null 2>&1; then printf "branch\\n" >> "$out"; field git symbolic-ref -q --short HEAD; else status=$?; if [ "$status" -ne 1 ]; then exit "$status"; fi; printf "detached\\n\\n" >> "$out"; fi
+if git rev-parse --verify HEAD >/dev/null 2>&1; then printf "head\\n" >> "$out"; field git rev-parse --verify HEAD; field git log -10 -z --format=%B%x00; else status=$?; if [ "$status" -ne 128 ] || ! git symbolic-ref -q HEAD >/dev/null 2>&1 || ! git status --porcelain >/dev/null 2>&1; then exit 1; fi; printf "unborn\\n\\n\\n" >> "$out"; fi
 if git config --type=bool --get commit.gpgsign >/dev/null 2>&1; then printf "set\\n" >> "$out"; field git config --type=bool --get commit.gpgsign; else status=$?; if [ "$status" -eq 1 ]; then printf "unset\\n\\n" >> "$out"; else printf "error\\n\\n" >> "$out"; fi; fi
 if git config --get user.signingkey >/dev/null 2>&1; then printf "set\\n" >> "$out"; field git config --get user.signingkey; else status=$?; if [ "$status" -eq 1 ]; then printf "unset\\n\\n" >> "$out"; else printf "error\\n\\n" >> "$out"; fi; fi
 printf "END\\n" >> "$out"
@@ -152,7 +152,7 @@ export function createPending(scope: string, sessionID: string, agent: string, c
     const stat = fstatSync(fd)
 
     return { scope, sessionID, agent, counter: counterValue, directory, workdir, fd,
-      identity: { dev: stat.dev, ino: stat.ino, uid: stat.uid }, expires: Date.now() + ttl,
+      identity: { dev: stat.dev, ino: stat.ino, uid: stat.uid }, expires: Date.now() + captureTimeout,
       command: captureCommand(file) }
   } catch (error) {
     rmSync(directory, { recursive: true, force: true })
