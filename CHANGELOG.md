@@ -2,6 +2,15 @@
 
 All notable changes to `opencode-commit-guard` are documented in this file.
 
+## 1.0.4 (2026-09-23)
+
+- Add `commit_context` to cache authorized Git commit baselines and signing settings in plugin storage.
+- Derive signoff from captured effective `commit.gpgsign` and remove the `requireSignoff` option.
+- Block commits without a valid baseline and give capture instructions.
+- Reject ambiguous commit targets, including `git -C`, environment mutations, and directory-changing wrappers, instead of reusing another checkout's baseline.
+- Require verified foreground shell metadata and a complete private artifact; reject background, timed-out, truncated, or unverified captures.
+- Keep `git commit --amend --no-edit` without re-validating the committed message; allow generated `--fixup` commits and validate explicit `fixup!` and `squash!` subjects alongside normal commit messages.
+
 ## 1.0.3 (2026-09-23)
 
 - Update compatible OpenCode V2, schema, Effect, and Bun development dependencies.

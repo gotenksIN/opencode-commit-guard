@@ -1,6 +1,6 @@
 {
   "name": "opencode-commit-guard",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "OpenCode V2 plugin enforcing git commit format rules",
   "type": "module",
   "main": "./dist/index.js",
