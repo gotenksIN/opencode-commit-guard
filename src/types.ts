@@ -41,11 +41,14 @@ export interface ShellToken {
   readonly type: ShellTokenType
   readonly value: string
   readonly substitutions?: readonly string[]
+  readonly heredoc?: { readonly body: string; readonly quoted: boolean; readonly complete: boolean }
 }
 
 export interface GitCommitInvocation {
   readonly messages: readonly string[]
   readonly filePaths: readonly string[]
+  readonly stdinMessage?: string
+  readonly stdinError?: string
   readonly hasSignoffFlag: boolean
   readonly isAmend: boolean
   readonly hasNoEdit?: boolean

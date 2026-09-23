@@ -163,6 +163,8 @@ function pushWord(
 
 export function tokenizeShell(command: string): ShellToken[] {
   const tokens: ShellToken[] = []
+  const pendingHeredocs: { index: number; delimiter: string; quoted: boolean }[] = []
+  let pendingDelimiter: number | undefined
   let i = 0
 
   while (i < command.length) {
@@ -210,6 +212,39 @@ export function tokenizeShell(command: string): ShellToken[] {
     ) {
       tokens.push({ type: "operator", value: character })
       i++
+
+      if (character === "\n" && pendingHeredocs.length > 0) {
+        for (const heredoc of pendingHeredocs) {
+          const bodyStart = i
+          let complete = false
+
+          while (i < command.length) {
+            const lineEnd = command.indexOf("\n", i)
+            const end = lineEnd < 0 ? command.length : lineEnd
+            const line = command.slice(i, end)
+            i = lineEnd < 0 ? end : end + 1
+
+            if (line === heredoc.delimiter) {
+              complete = true
+              tokens[heredoc.index] = {
+                ...tokens[heredoc.index]!,
+                heredoc: { body: command.slice(bodyStart, i - (line.length + (lineEnd < 0 ? 0 : 1))), quoted: heredoc.quoted, complete },
+              }
+              break
+            }
+          }
+
+          if (!complete) {
+            tokens[heredoc.index] = {
+              ...tokens[heredoc.index]!,
+              heredoc: { body: command.slice(bodyStart), quoted: heredoc.quoted, complete },
+            }
+          }
+        }
+
+        pendingHeredocs.length = 0
+      }
+
       continue
     }
 
@@ -217,11 +252,14 @@ export function tokenizeShell(command: string): ShellToken[] {
 
     if (redirectMatch !== null && redirectMatch[0] !== undefined) {
       tokens.push({ type: "redirect", value: redirectMatch[0] })
+
+      if (/^\d*<<$/.test(redirectMatch[0])) pendingDelimiter = tokens.length - 1
       i += redirectMatch[0].length
       continue
     }
 
     let value = ""
+    let quoted = false
     const substitutions: string[] = []
 
     while (i < command.length) {
@@ -235,6 +273,8 @@ export function tokenizeShell(command: string): ShellToken[] {
       }
 
       if (current === "\\") {
+        quoted = true
+
         if (i + 1 < command.length) {
           value += command[i + 1]
           i += 2
@@ -247,6 +287,7 @@ export function tokenizeShell(command: string): ShellToken[] {
       }
 
       if (current === "$" && command[i + 1] === "'") {
+        quoted = true
         i += 2
 
         while (i < command.length) {
@@ -280,6 +321,7 @@ export function tokenizeShell(command: string): ShellToken[] {
       }
 
       if (current === "'") {
+        quoted = true
         i++
 
         while (i < command.length && command[i] !== "'") {
@@ -292,6 +334,7 @@ export function tokenizeShell(command: string): ShellToken[] {
       }
 
       if (current === '"') {
+        quoted = true
         i++
 
         while (i < command.length && command[i] !== '"') {
@@ -343,25 +386,35 @@ export function tokenizeShell(command: string): ShellToken[] {
     }
 
     pushWord(tokens, value, substitutions)
+
+    if (pendingDelimiter !== undefined) {
+      pendingHeredocs.push({ index: pendingDelimiter, delimiter: value, quoted })
+      pendingDelimiter = undefined
+    }
   }
 
   return tokens
 }
 
-function splitSimpleCommands(tokens: readonly ShellToken[]): ShellToken[][] {
-  const commands: ShellToken[][] = []
+function splitSimpleCommands(tokens: readonly ShellToken[]): { tokens: ShellToken[]; pipeline: boolean }[] {
+  const commands: { tokens: ShellToken[]; pipeline: boolean }[] = []
   let current: ShellToken[] = []
+  let precedingPipeline = false
 
   for (const token of tokens) {
     if (token.type === "operator") {
-      if (current.length > 0) commands.push(current)
+      const isPipeline = token.value === "|" || token.value === "|&"
+
+      if (current.length > 0) commands.push({ tokens: current, pipeline: precedingPipeline || isPipeline })
       current = []
+
+      if (token.value !== "\n" || !precedingPipeline) precedingPipeline = isPipeline
     } else {
       current.push(token)
     }
   }
 
-  if (current.length > 0) commands.push(current)
+  if (current.length > 0) commands.push({ tokens: current, pipeline: precedingPipeline })
 
   return commands
 }
@@ -680,12 +733,40 @@ export function extractGitCommits(command: string): GitCommitInvocation[] {
   const tokens = tokenizeShell(command)
   const invocations: GitCommitInvocation[] = []
 
-  for (const commandTokens of splitSimpleCommands(tokens)) {
+  for (const simple of splitSimpleCommands(tokens)) {
+    const commandTokens = simple.tokens
     const words = extractCommandWords(commandTokens)
     const commandStart = findCommandStart(words)
     const invocation = extractInvocation(words, commandStart)
 
-    if (invocation !== undefined) invocations.push(invocation)
+    if (invocation !== undefined) {
+      if (!invocation.filePaths.includes("-")) {
+        invocations.push(invocation)
+        continue
+      }
+
+      const heredocs = commandTokens.filter((token) => token.type === "redirect" && /^\d*<<$/.test(token.value))
+
+      const stdinRedirects = commandTokens.filter((token) =>
+        token.type === "redirect" && /^(?:0)?</.test(token.value)
+      )
+
+      const heredoc = heredocs[0]
+      let stdinError: string | undefined
+
+      if (simple.pipeline) stdinError = "Pipelines cannot supply a validated commit message."
+      else if (heredocs.length !== 1 || stdinRedirects.length !== 1 || heredoc?.value !== "<<" && heredoc?.value !== "0<<") {
+        stdinError = "Use exactly one quoted stdin heredoc on git commit -F -, with no other stdin redirects."
+      } else if (heredoc.heredoc?.quoted !== true || heredoc.heredoc.complete !== true) {
+        stdinError = "Use a complete quoted heredoc delimiter, for example: git commit -s -F - <<'EOF'."
+      }
+
+      invocations.push({
+        ...invocation,
+        stdinMessage: stdinError === undefined ? heredoc?.heredoc?.body : undefined,
+        stdinError,
+      })
+    }
   }
 
   for (const token of tokens) {

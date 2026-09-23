@@ -80,10 +80,21 @@ export function validateGitCommits(
     const filePath = invocation.filePaths.at(-1)
 
     if (filePath !== undefined) {
-      allViolations.push(
-        `Cannot validate a commit message from ${filePath === "-" ? "standard input" : `file "${filePath}"`} before shell permissions run. Use an inline message, for example: git commit -s -m "kernel: add support for foo".`,
-      )
-      continue
+      if (filePath !== "-" || invocation.filePaths.length !== 1) {
+        allViolations.push(
+          `Cannot validate a commit message from file "${filePath}" before shell permissions run. Use an inline message, for example: git commit -s -m "kernel: add support for foo".`,
+        )
+        continue
+      }
+
+      if (invocation.stdinError !== undefined || invocation.stdinMessage === undefined || collectedMessages.length > 0) {
+        allViolations.push(
+          `${invocation.stdinError ?? "Cannot combine -F - with -m or unsupported stdin input."} Use one quoted heredoc directly on git commit -s -F - <<'EOF', or use -m "kernel: add support for foo".`,
+        )
+        continue
+      }
+
+      collectedMessages.push(invocation.stdinMessage)
     }
 
     if (collectedMessages.length === 0) {
