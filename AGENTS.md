@@ -11,7 +11,7 @@ Do not use `npm`, `npx`, or `bunx`.
 - `bun run lint`: Run code linter checks.
 
 Always maintain compatibility with the OpenCode V2 plugin API.
-Require shell metadata proving `status: "exited"` and `exit: 0` as well as the artifact end sentinel before publishing a Git baseline.
+Require shell tool-result metadata proving `status: "completed"`, `exit: 0`, and `truncated: false`, with no timeout or background shell ID, as well as the artifact end sentinel before publishing a Git baseline.
 
 ## Code standards
 

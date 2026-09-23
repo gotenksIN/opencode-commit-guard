@@ -209,10 +209,15 @@ describe("opencode-commit-guard plugin", () => {
   })
 
   test("publishes a capture only after a verified foreground exit", async () => {
-    const accepted = { status: "exited", exit: 0 }
+    const accepted = { status: "completed", exit: 0, truncated: false }
 
-    for (const metadata of [undefined, {}, { status: "running" }, { status: "exited", exit: 1 },
-      accepted]) {
+    for (const metadata of [undefined, {},
+      { status: "running", shellID: "sh_background", truncated: false },
+      { status: "completed", exit: 7, truncated: false },
+      { status: "completed", truncated: true, exit: 0 },
+      { status: "completed", truncated: false, timeout: true },
+      { status: "exited", exit: 0, truncated: false },
+      { status: "completed", exit: 0, truncated: false, unexpected: true }, accepted]) {
       const harness = await setupTestPlugin({}, "missing")
       const command = await harness.prepareCapture()
       const shell = Bun.spawnSync(["bash", "-c", command], { cwd: import.meta.dir })
@@ -246,7 +251,7 @@ describe("opencode-commit-guard plugin", () => {
 
       expect(shell.exitCode).toBe(0)
       clock += 6000
-      await harness.completeCapture(command, { status: "exited", exit: 0 })
+      await harness.completeCapture(command, { status: "completed", exit: 0, truncated: false })
       await expect(harness.executeBefore("shell", {
         command: 'git commit -s -m "kernel: approved capture"',
       })).resolves.toBeUndefined()
@@ -267,7 +272,7 @@ describe("opencode-commit-guard plugin", () => {
       const unbornShell = Bun.spawnSync(["bash", "-c", unbornCommand], { cwd: directory })
 
       expect(unbornShell.exitCode).toBe(0)
-      await unborn.completeCapture(unbornCommand, { status: "exited", exit: 0 })
+      await unborn.completeCapture(unbornCommand, { status: "completed", exit: 0, truncated: false })
       await expect(unborn.executeBefore("shell", {
         command: 'git commit -s -m "kernel: valid unborn checkout"',
       })).resolves.toBeUndefined()
@@ -282,7 +287,7 @@ describe("opencode-commit-guard plugin", () => {
 
       expect(shell.exitCode).not.toBe(0)
       expect(shell.stdout.toString()).not.toContain("RECEIPT_OK")
-      await harness.completeCapture(command, { status: "exited", exit: shell.exitCode })
+      await harness.completeCapture(command, { status: "completed", truncated: false, exit: shell.exitCode })
       await expect(harness.executeBefore("shell", {
         command: 'git commit -s -m "kernel: reject corrupt HEAD"',
       })).rejects.toThrow("Call commit_context")

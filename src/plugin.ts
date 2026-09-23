@@ -192,19 +192,16 @@ export const plugin = Plugin.define({
       yield* Effect.gen(function*() {
         if (event.status !== "completed" || Date.now() >= attempt.expires ||
           (yield* counter(ctx, attempt.scope)) !== attempt.counter) return
-        // SAFETY: Tool result metadata is untrusted JSON; checked fields below are optional.
+        // SAFETY: Tool result metadata is untrusted JSON; verify every required field before import.
         const metadata = event.result.metadata as JsonValue | undefined
 
         if (!isRecord(metadata)) return
 
-        const info = isRecord(metadata["shell"]) ? metadata["shell"] : metadata
-
-        if (info["status"] !== "exited" || info["exit"] !== 0) return
-
-        const output = isRecord(info["output"]) ? info["output"] : isRecord(metadata["output"]) ? metadata["output"] : metadata
-
-        if (output["truncated"] === true || info["truncated"] === true || metadata["truncated"] === true ||
-          isRecord(metadata["output"]) && metadata["output"]["truncated"] === true) return
+        // OpenCode's shell tool reports completed/exit:0 after a foreground process exits.
+        // Continued jobs report running/shellID; timeouts report timeout:true without an exit.
+        if (metadata["status"] !== "completed" || metadata["exit"] !== 0 || metadata["truncated"] !== false ||
+          metadata["timeout"] !== undefined && metadata["timeout"] !== false || metadata["shellID"] !== undefined ||
+          Object.keys(metadata).some((key) => !["status", "exit", "truncated", "timeout"].includes(key))) return
 
         const session = yield* Effect.orElseSucceed(ctx.session.get({ sessionID: event.sessionID }), () => undefined)
 

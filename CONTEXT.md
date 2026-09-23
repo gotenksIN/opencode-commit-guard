@@ -150,7 +150,10 @@ The plugin (`src/plugin.ts`) wires the validation engine to OpenCode's tool exec
 The on-demand `commit_context` tool returns a Git capture command for the foreground `shell` tool.
 The plugin creates a private owner-only artifact and retains its file descriptor before returning the command.
 It claims the exact command against the shell tool-call identity before execution.
-The importer requires shell process metadata with `status: "exited"` and `exit: 0`, and rejects missing or unresolved metadata.
+The installed V2 shell tool's result metadata uses `status: "completed"`, `exit: 0`, and `truncated: false` for a successful foreground process.
+This is the tool-result status, not `Shell.Info.status`, which uses `exited`.
+A continued background call reports `status: "running"` and `shellID`; a timeout reports `timeout: true` with no exit; a killed call reports an `execute.after` error without result metadata.
+The importer requires the observed successful metadata combination, rejects unrecognized or absent fields, and separately requires the artifact end sentinel.
 It also validates bounded artifact framing, ownership, size, and a final end sentinel through that descriptor.
 The plugin extends the attempt's deadline when `execute.before` claims the exact command and again when the shell process is created after permission approval.
 The shell-creation hook only updates the deadline; it does not read Git.
