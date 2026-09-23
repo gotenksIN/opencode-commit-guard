@@ -18,13 +18,19 @@ async function setupTestPlugin(options: JsonValue = {}) {
     options,
     location: {
       directory: import.meta.dir,
+      project: { id: "test-project" },
     },
     tool: {
+      transform: () => Effect.succeed({ dispose: Effect.void }),
       hook: (name: string, callback: ToolHookCallback) => Effect.sync(() => {
         hooks.set(name, callback)
 
         return { dispose: Effect.void }
       }),
+    },
+    storage: {
+      get: () => Effect.succeed(undefined),
+      set: () => Effect.void,
     },
   }
 
