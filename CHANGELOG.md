@@ -2,6 +2,14 @@
 
 All notable changes to `opencode-commit-guard` are documented in this file.
 
+## 1.0.5 (2026-10-02)
+
+- Add support for Git repositories located in subdirectories and moved worktrees without requiring session moves.
+- Add `workdir` and `directory` options to the `commit_context` tool.
+- Automatically detect a single sub-repository when the project directory is not a Git repository, and list available repositories when multiple are present.
+- Resolve canonical physical paths with `realpathSync` to prevent symlink target mismatches.
+- Update `@opencode/plugin` and `@opencode/schema` to `2.0.21`, and update Oxlint dependencies to `1.86.0`.
+
 ## 1.0.4 (2026-09-23)
 
 - Add `commit_context` to cache authorized Git commit baselines and signing settings in plugin storage.
