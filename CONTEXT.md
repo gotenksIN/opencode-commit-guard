@@ -142,12 +142,17 @@ The plugin (`src/plugin.ts`) wires the validation engine to OpenCode's tool exec
 - Runs `extractGitCommits(command)` and validates all found invocations.
 - Loads a checksum-validated, session-and-worktree-scoped signing baseline from plugin storage.
 - Rejects missing or invalid baselines, remote workspaces, and commits whose target differs from the captured checkout.
+- Supports Git repositories located at the project root, in subdirectories, or in moved sessions/worktrees.
 - Requires signoff only when the baseline records effective `commit.gpgsign=true`.
 - Validation failures use the typed `Tool.Error` failure channel so parallel calls settle independently without becoming Effect defects.
 
 ## Authorized context capture
 
 The on-demand `commit_context` tool returns a Git capture command for the foreground `shell` tool.
+The tool accepts an optional `workdir` (or `directory` alias) parameter to target a repository located in a subdirectory or worktree.
+When omitted in a non-repository directory, it automatically targets a single sub-repository or lists available repositories.
+Repeat an explicit `workdir` on the follow-up call to read that checkout's baseline.
+An argument-free call prioritizes the session directory's repository over a remembered target.
 The plugin creates a private owner-only artifact and retains its file descriptor before returning the command.
 It claims the exact command against the shell tool-call identity before execution.
 The installed V2 shell tool's result metadata uses `status: "completed"`, `exit: 0`, and `truncated: false` for a successful foreground process.

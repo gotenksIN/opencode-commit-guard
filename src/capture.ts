@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto"
-import { closeSync, constants, fstatSync, mkdtempSync, openSync, readSync, rmSync } from "node:fs"
+import { closeSync, constants, existsSync, fstatSync, mkdtempSync, openSync, readdirSync, readSync, realpathSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join, relative } from "node:path"
+import { dirname, join, relative, resolve } from "node:path"
 import type { Plugin } from "@opencode/plugin/effect"
 import { Effect, Semaphore } from "effect"
 import { isJSONString, isRecord } from "./types.js"
@@ -50,11 +50,135 @@ function digest(text: string): string {
   return createHash("sha256").update(text).digest("hex")
 }
 
-export function scopeFor(ctx: Context, sessionID: string, config: CommitGuardConfig): string {
+export function scopeFor(ctx: Context, sessionID: string, config: CommitGuardConfig, targetDir?: string): string {
   const location = ctx.location
 
-  return digest(JSON.stringify([version, location.project.id, sessionID, location.directory, location.workspaceID ?? null,
+  return digest(JSON.stringify([version, location.project.id, sessionID, targetDir ?? location.directory, location.workspaceID ?? null,
     policy, config.requireScope, config.allowedScopes ?? null, config.maxLineLength]))
+}
+
+export function isGitDirectory(dir: string): boolean {
+  try {
+    return existsSync(join(dir, ".git"))
+  } catch {
+    return false
+  }
+}
+
+export function findGitRoot(startDir: string): string | undefined {
+  let current: string
+
+  try {
+    current = realpathSync(startDir)
+  } catch {
+    return undefined
+  }
+
+  while (true) {
+    if (isGitDirectory(current)) {
+      return current
+    }
+
+    const parent = dirname(current)
+
+    if (parent === current) {
+      break
+    }
+
+    current = parent
+  }
+
+  return undefined
+}
+
+export interface ResolvedTargetWorkdir {
+  readonly workdir?: string
+  readonly error?: string
+}
+
+export function findSubRepos(dir: string, maxDepth = 2): string[] {
+  const repos: string[] = []
+
+  function search(currentDir: string, currentDepth: number): void {
+    if (currentDepth > maxDepth) return
+
+    try {
+      const entries = readdirSync(currentDir, { withFileTypes: true })
+
+      for (const entry of entries) {
+        if (!entry.isDirectory() && !entry.isSymbolicLink()) continue
+
+        if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === "dist") continue
+
+        const fullPath = join(currentDir, entry.name)
+
+        if (isGitDirectory(fullPath)) {
+          repos.push(fullPath)
+        } else if (currentDepth < maxDepth) {
+          search(fullPath, currentDepth + 1)
+        }
+      }
+    } catch {
+      // Inaccessible directory
+    }
+  }
+
+  search(dir, 1)
+
+  return repos
+}
+
+export function resolveTargetWorkdir(
+  baseDir: string,
+  requestedDir?: string,
+): ResolvedTargetWorkdir {
+  if (requestedDir !== undefined) {
+    const resolvedDir = resolve(baseDir, requestedDir)
+
+    if (!existsSync(resolvedDir)) {
+      return { error: `Directory "${requestedDir}" does not exist.` }
+    }
+
+    try {
+      if (!statSync(resolvedDir).isDirectory()) {
+        return { error: `Path "${requestedDir}" is not a directory.` }
+      }
+    } catch {
+      return { error: `Could not access directory "${requestedDir}".` }
+    }
+
+    const gitRoot = findGitRoot(resolvedDir)
+
+    if (gitRoot === undefined) {
+      return { error: `Directory "${requestedDir}" is not a Git repository or inside one.` }
+    }
+
+    return { workdir: realpathSync(resolvedDir) }
+  }
+
+  const currentGitRoot = findGitRoot(baseDir)
+
+  if (currentGitRoot !== undefined) {
+    return { workdir: realpathSync(baseDir) }
+  }
+
+  const subRepos = findSubRepos(baseDir)
+
+  if (subRepos.length === 1) {
+    return { workdir: realpathSync(subRepos[0]!) }
+  }
+
+  if (subRepos.length === 0) {
+    return {
+      error: `No Git repository found in ${baseDir}. Specify the repository directory with the 'workdir' option, for example: commit_context({ workdir: "path/to/repo" }).`,
+    }
+  }
+
+  const repoList = subRepos.map((repo) => relative(baseDir, repo)).join(", ")
+
+  return {
+    error: `The directory ${baseDir} is not a Git repository. Multiple Git repositories were found: ${repoList}.\nSpecify which repository to target with the 'workdir' option, for example:\ncommit_context({ workdir: "${relative(baseDir, subRepos[0]!)}" })`,
+  }
 }
 
 function counterKey(scope: string): string { return `counter/${scope}` }
@@ -202,7 +326,7 @@ export function importCapture(pending: Pending): Baseline {
   const messages = head === null ? [] : rawLog.split("\0\0").filter((message) => message.length > 0)
 
   if (!root.startsWith("/") || !gitDir.startsWith("/") || !commonDir.startsWith("/") ||
-    relative(root, pending.workdir).startsWith("..") ||
+    root !== findGitRoot(pending.workdir) ||
     !["branch", "detached"].includes(fields[4]!) || !["head", "unborn"].includes(fields[6]!) ||
     (head !== null && !/^[a-f0-9]{40,64}$/.test(head)) ||
     (head === null && rawLog !== "") || (head !== null && (messages.length === 0 || messages.length > 10 || !rawLog.endsWith("\0\0")))) throw new Error("Invalid Git baseline")

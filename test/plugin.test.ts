@@ -63,7 +63,9 @@ async function setupTestPlugin(options: JsonValue = {}, signing: "true" | "false
         // SAFETY: The harness provides the location fields used by scopeFor.
         const scope = scopeFor(ctx as never, "test-session", parseConfig(options))
 
-        const baseline = { directory, workdir: directory, gitDir: `${directory}/.git`, commonDir: `${directory}/.git`,
+        const root = directory === import.meta.dir ? join(import.meta.dir, "..") : directory
+
+        const baseline = { directory: root, workdir: directory, gitDir: `${root}/.git`, commonDir: `${root}/.git`,
           branch: "main", head: null, messages: [], gpgsign: signing, signingkey: null }
 
         const generation = "test-generation"

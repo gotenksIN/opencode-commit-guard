@@ -59,8 +59,12 @@ You can also specify custom configuration options:
 ## Capture commit context
 
 Call `commit_context` before your first commit in each session and worktree.
+If the Git repository is in a subdirectory or differs from the project root, specify `workdir` (e.g., `commit_context({ workdir: "my-repo" })`).
+If `workdir` is omitted and the project root is not a Git repository, the plugin automatically selects the repository if exactly one exists, or lists available repositories if multiple are present.
 Run the returned command through the foreground `shell` tool with the indicated workdir.
 Call `commit_context` again to read concise guidance.
+Repeat the same `workdir` on each call when you select a repository explicitly.
+An argument-free call selects the session directory when it is inside a Git repository, even after an explicit selection.
 If the shell result lacks a verified successful process exit, capture again instead of using a partial baseline.
 The command writes full historical messages to a private file and prints only a fixed receipt.
 The plugin does not put complete historical messages into tool results or model context.
