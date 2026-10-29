@@ -22,6 +22,7 @@ export interface CommitGuardConfig {
 - `maxLineLength`: Maximum allowed line length across subject and body lines. Defaults to `72`. Setting this to `0` disables length checks.
 - Signoff applies only when a verified baseline records effective `commit.gpgsign=true`.
   A missing, failed, or stale baseline blocks the commit.
+- `parseConfig` rejects allowed-scope entries that cannot match the validator's shared scope pattern.
 
 ### Commit invocation
 

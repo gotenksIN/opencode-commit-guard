@@ -6,6 +6,7 @@ import {
   isRecord,
 } from "./types.js"
 import type { CommitGuardConfig, JsonValue } from "./types.js"
+import { scopePattern } from "./scope.js"
 
 export function parseConfig(options: JsonValue | undefined): CommitGuardConfig {
   if (options === undefined) {
@@ -40,6 +41,10 @@ export function parseConfig(options: JsonValue | undefined): CommitGuardConfig {
     for (const item of rawAllowedScopes) {
       if (!isJSONString(item) || item.trim().length === 0) {
         throw new Error("Invalid plugin option allowedScopes; expected an array of non-empty strings.")
+      }
+
+      if (scopePattern.exec(`${item.trim()}: Subject`)?.[1] !== item.trim()) {
+        throw new Error(`Invalid plugin option allowedScopes; scope ${JSON.stringify(item)} cannot match the commit scope syntax.`)
       }
 
       scopes.push(item.trim())

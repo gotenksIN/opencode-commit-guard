@@ -105,6 +105,7 @@ The plugin rejects subject lines that omit the colon, leave the scope empty, or 
 
 When `allowedScopes` contains values, the extracted scope must match an entry in the list.
 For conventional commits such as `feat(parser): ...`, the plugin accepts either the inner scope (`parser`), the full scope token (`feat(parser)`), or the type prefix (`feat`).
+Each configured entry must match the scope syntax; spaces and characters such as `@` are invalid.
 
 ### 3. Maximum line length (`maxLineLength`)
 

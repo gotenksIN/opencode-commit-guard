@@ -311,6 +311,13 @@ describe("opencode-commit-guard plugin", () => {
     await expect(harness.executeBefore("shell", { command: "git commit -s -m 'core: Root'", workdir: directory })).rejects.toThrow("No published baseline")
   })
 
+  test("rejects impossible allowed scopes during configuration", () => {
+    for (const scope of ["bad scope", "foo@bar", "core:", "core: Subject", "feat()", "(core)"]) {
+      expect(() => parseConfig({ allowedScopes: [scope] })).toThrow(`scope ${JSON.stringify(scope)} cannot match`)
+    }
+
+    expect(parseConfig({ allowedScopes: ["core", "feat(core)", "foo/bar", "build-tools"] }).allowedScopes).toEqual(["core", "feat(core)", "foo/bar", "build-tools"])
+  })
   test("allows non-shell tools without interception", async () => {
     const harness = await setupTestPlugin()
     await expect(

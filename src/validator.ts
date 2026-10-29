@@ -4,7 +4,7 @@ import type {
   OverlongLine,
 } from "./types.js"
 
-const scopePattern = /^([a-zA-Z0-9_\-./]+(?:\([a-zA-Z0-9_\-./]+\))?):\s+(.+)$/
+import { scopePattern } from "./scope.js"
 
 const signoffPattern = /^\s*Signed-off-by:\s+[^<>\r\n]+\s+<[^<>\r\n@]+@[^<>\r\n@]+>\s*$/i
 
