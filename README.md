@@ -151,6 +151,11 @@ EOF
 
 The plugin rejects file-backed `-F` or `--file` messages without reading the files.
 It also rejects unquoted or ambiguous standard-input sources.
+Supply the final message literally; message words containing shell expansion are rejected without evaluation.
+Single quotes and ANSI-C quotes (`$'...'`) supply literal text.
+The parser inspects commits inside command substitutions, backticks, and literal `bash`, `sh`, or `zsh` `-c` bodies.
+Run Git directly if a shell body is dynamic or cannot be parsed reliably.
+Put trailers in the literal message body or use `-s`; `--trailer` is rejected.
 The guard resolves the signing baseline before reporting message-format violations.
 `git commit --help` and `git commit -h` do not require a baseline.
 

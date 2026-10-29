@@ -61,6 +61,16 @@ export function validateGitCommits(
       continue
     }
 
+    if (invocation.messageExpansion) {
+      allViolations.push("Cannot validate a message containing shell expansion. Supply the final message literally.")
+      continue
+    }
+
+    if (invocation.hasTrailer) {
+      allViolations.push("Cannot validate --trailer. Put the trailer in the literal message body or use -s.")
+      continue
+    }
+
     const collectedMessages: string[] = [...invocation.messages]
 
     const filePath = invocation.filePaths.at(-1)

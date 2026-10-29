@@ -1,7 +1,17 @@
 import { describe, expect, test } from "bun:test"
 import { extractGitCommits, tokenizeShell } from "../src/shell.js"
+import { defaultConfig } from "../src/types.js"
+import { validateGitCommits } from "../src/validator.js"
 
 describe("tokenizeShell", () => {
+  test("decodes Bash ANSI-C escapes and preserves unknown escapes", () => {
+    const tokens = tokenizeShell(String.raw`$'core:\x20Subject\u0021\U0001F600\101\cA\e\E\a\b\f\n\r\t\v\\\'\"\?\z'`)
+
+    expect(tokens[0]?.value).toBe("core: Subject!😀A\x01\x1b\x1b\x07\b\f\n\r\t\v\\'\"?\\z")
+    expect(tokenizeShell(String.raw`$'core: \xC3\xA9\303\251'`)[0]?.value).toBe("core: éé")
+    expect(tokenizeShell(String.raw`$'core: \xC3'$'\xA9'`)[0]?.value).toBe("core: é")
+    expect(tokenizeShell(String.raw`$'core: Subject\0ignored'`)[0]?.value).toBe("core: Subject")
+  })
   test("tokenizes simple commands with whitespace", () => {
     const tokens = tokenizeShell("git commit -m 'first commit' -s")
     expect(tokens.map((t) => t.value)).toEqual(["git", "commit", "-m", "first commit", "-s"])
@@ -85,7 +95,8 @@ describe("tokenizeShell", () => {
       ["word", "-s"],
       ["redirect", ">"],
       ["word", "/dev/null"],
-      ["redirect", "2>&1"],
+      ["redirect", "2>&"],
+      ["word", "1"],
     ])
     const invocations = extractGitCommits("git commit -m 'scope: fix' -s > /dev/null 2>&1")
     expect(invocations).toHaveLength(1)
@@ -100,6 +111,60 @@ describe("tokenizeShell", () => {
 })
 
 describe("extractGitCommits", () => {
+  test("detects commands after every supported redirect form", () => {
+    for (const redirect of [">123", "2>& 1", "2>&1", ">& 1", "&>out", "&>>out", "3>out", ">>out", "<in", "<<<text", "<>file", ">|out"]) {
+      expect(extractGitCommits(`${redirect} git commit -m "bad"`)[0]?.messages).toEqual(["bad"])
+    }
+  })
+
+  test("rejects expansions in message words without executing them", () => {
+    for (const message of ["\"core: $(printf '%090d' 0)\"", '"core: `printf x`"', '"core: $VAR"', '"core: ${VAR}"', '"core: $((1+2))"', '"core: $[10**18]"', "core:$VAR", '--message="core: $VAR"', '-m"core: $VAR"']) {
+      const command = `git commit -s ${message.startsWith("-") ? "" : "-m "}${message}`
+
+      expect(() => validateGitCommits(extractGitCommits(command), defaultConfig, command)).toThrow("Cannot validate a message containing shell expansion. Supply the final message literally.")
+    }
+
+    for (const message of ["'core: $VAR'", "$'core: $(echo x)'", '"core: \\$VAR"']) {
+      const command = `git commit -s -m ${message}`
+
+      expect(() => validateGitCommits(extractGitCommits(command), defaultConfig, command)).not.toThrow()
+    }
+  })
+
+  test("finds commits in backticks, substitutions, and literal shell -c bodies", () => {
+    for (const command of ['echo `git commit -m "bad"`', 'echo "$(git commit -m bad)"', "bash -c 'git commit -m bad'", "sh -c 'git commit -m bad'", "zsh -c 'git commit -m bad'", "bash -lc 'git commit -m bad'", "bash -c -- 'git commit -m bad'", "bash -c -l 'git commit -m bad'", "bash -euo pipefail -c 'git commit -m bad'", "bash -o -c 'git commit -m bad'"]) {
+      const invocations = extractGitCommits(command)
+
+      expect(invocations).toHaveLength(1)
+      expect(() => validateGitCommits(invocations, defaultConfig, command)).toThrow("Missing scope")
+    }
+
+    expect(() => extractGitCommits('bash -c "$SCRIPT"')).toThrow("Run git commit directly")
+    expect(() => extractGitCommits("echo `git commit")).toThrow("Run git commit directly")
+  })
+
+  test("does not execute tab-stripped heredoc bodies as commands", () => {
+    expect(extractGitCommits('cat <<-EOF\n\tgit commit -m "bad"\n\tEOF\n')).toEqual([])
+    expect(extractGitCommits("cat <<-'EOF'\n\tgit commit -m bad\n\tEOF\ngit commit -m 'core: actual' -s")[0]?.messages).toEqual(["core: actual"])
+  })
+
+  test("rejects --trailer in both forms without including raw trailer text", () => {
+    for (const trailer of ['--trailer "Signed-off-by: Private <private@example.com>"', '--trailer="Signed-off-by: Private <private@example.com>"']) {
+      const command = `git commit -m 'core: Subject' ${trailer}`
+
+      try {
+        validateGitCommits(extractGitCommits(command), defaultConfig, command)
+        throw new Error("Expected rejection")
+      } catch (error) {
+        expect(error).toBeInstanceOf(Error)
+
+        if (error instanceof Error) {
+          expect(error.message).toContain("Cannot validate --trailer")
+          expect(error.message).not.toContain("private@example.com")
+        }
+      }
+    }
+  })
   test("extracts standard git commit with -m and -s flags", () => {
     const invocations = extractGitCommits("git commit -m 'kernel: fix race' -s")
     expect(invocations).toHaveLength(1)

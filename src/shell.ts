@@ -38,12 +38,15 @@ const commitLongOptionsWithArg = new Set([
   "--reuse-message",
   "--squash",
   "--template",
-  "--trailer",
 ])
 
 interface CommandSubstitution {
   readonly content: string
   readonly end: number
+}
+
+interface ANSIEscape extends CommandSubstitution {
+  readonly byte?: number
 }
 
 function isWordSeparator(character: string): boolean {
@@ -62,7 +65,8 @@ function isWordSeparator(character: string): boolean {
   )
 }
 
-function consumeCommandSubstitution(command: string, start: number): CommandSubstitution {
+function consumeCommandSubstitution(command: string, start: number, nesting = 0): CommandSubstitution {
+  if (nesting > 12) throw new Error("Shell parsing limit exceeded. Run git commit directly.")
   let depth = 1
   let quote: "'" | '"' | undefined
   let i = start + 2
@@ -86,7 +90,7 @@ function consumeCommandSubstitution(command: string, start: number): CommandSubs
         quote = undefined
         i++
       } else if (character === "$" && command[i + 1] === "(") {
-        i = consumeCommandSubstitution(command, i).end
+        i = consumeCommandSubstitution(command, i, nesting + 1).end
       } else {
         i++
       }
@@ -120,7 +124,7 @@ function consumeCommandSubstitution(command: string, start: number): CommandSubs
     }
 
     if (character === "$" && command[i + 1] === "(") {
-      i = consumeCommandSubstitution(command, i).end
+      i = consumeCommandSubstitution(command, i, nesting + 1).end
       atWordStart = false
       continue
     }
@@ -147,19 +151,64 @@ function consumeCommandSubstitution(command: string, start: number): CommandSubs
     i++
   }
 
-  return { content: command.slice(start + 2), end: command.length }
+  throw new Error("Cannot parse shell substitution reliably. Run git commit directly.")
+}
+
+function consumeBackticks(command: string, start: number): CommandSubstitution {
+  let content = ""
+
+  for (let i = start + 1; i < command.length; i++) {
+    if (command[i] === "`") return { content, end: i + 1 }
+
+    if (command[i] === "\\" && ["$", "`", "\\"].includes(command[i + 1] ?? "")) i++
+    content += command[i]
+  }
+
+  throw new Error("Cannot parse backtick substitution reliably. Run git commit directly.")
+}
+
+function ansiEscape(command: string, start: number): ANSIEscape {
+  const escaped = command[start + 1] ?? ""
+  const simple = new Map(Object.entries({ a: "\x07", b: "\b", e: "\x1b", E: "\x1b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v", "\\": "\\", "'": "'", '"': '"', "?": "?" }))
+  const literal = simple.get(escaped)
+
+  if (literal !== undefined) return { content: literal, end: start + 2 }
+
+  if (escaped === "c" && command[start + 2] !== undefined) {
+    const character = command[start + 2]!
+
+    return { content: String.fromCharCode(character === "?" ? 127 : character.toUpperCase().charCodeAt(0) & 31), end: start + 3 }
+  }
+
+  const count = escaped === "x" ? 2 : escaped === "u" ? 4 : escaped === "U" ? 8 : 0
+
+  const digits = count > 0 ? command.slice(start + 2).match(new RegExp(`^[0-9a-fA-F]{1,${count}}`))?.[0] :
+    command.slice(start + 1).match(/^[0-7]{1,3}/)?.[0]
+
+  if (digits !== undefined) {
+    const code = Number.parseInt(digits, count > 0 ? 16 : 8)
+
+    if (code > 0x10ffff) throw new Error("Cannot validate this ANSI-C escape. Supply the message literally.")
+
+    const end = start + (count > 0 ? 2 : 1) + digits.length
+
+    if (count === 0 || escaped === "x") return { content: "", byte: code & 255, end }
+
+    return { content: String.fromCodePoint(code), end }
+  }
+
+  return { content: `\\${escaped}`, end: start + 2 }
 }
 
 function pushWord(
   tokens: ShellToken[],
   value: string,
   substitutions: readonly string[],
+  expansion: boolean,
 ): void {
-  if (substitutions.length > 0) {
-    tokens.push({ type: "word", value, substitutions })
-  } else {
-    tokens.push({ type: "word", value })
-  }
+  const token: ShellToken = substitutions.length > 0 ? { type: "word", value, substitutions } : { type: "word", value }
+
+  tokens.push(expansion ? { ...token, expansion: true } : token)
 }
 
 function heredocSubstitutions(body: string): string[] {
@@ -183,7 +232,7 @@ function heredocSubstitutions(body: string): string[] {
 
 export function tokenizeShell(command: string): ShellToken[] {
   const tokens: ShellToken[] = []
-  const pendingHeredocs: { index: number; delimiter: string; quoted: boolean }[] = []
+  const pendingHeredocs: { index: number; delimiter: string; quoted: boolean; stripTabs: boolean }[] = []
   let pendingDelimiter: number | undefined
   let i = 0
 
@@ -223,7 +272,7 @@ export function tokenizeShell(command: string): ShellToken[] {
     if (
       character === "|" ||
       character === ";" ||
-      character === "&" ||
+      character === "&" && command[i + 1] !== ">" ||
       character === "\n" ||
       character === "(" ||
       character === ")" ||
@@ -244,9 +293,10 @@ export function tokenizeShell(command: string): ShellToken[] {
             const line = command.slice(i, end)
             i = lineEnd < 0 ? end : end + 1
 
-            if (line === heredoc.delimiter) {
+            if ((heredoc.stripTabs ? line.replace(/^\t+/, "") : line) === heredoc.delimiter) {
               complete = true
-              const body = command.slice(bodyStart, i - (line.length + (lineEnd < 0 ? 0 : 1)))
+              const rawBody = command.slice(bodyStart, i - (line.length + (lineEnd < 0 ? 0 : 1)))
+              const body = heredoc.stripTabs ? rawBody.replace(/^\t+/gm, "") : rawBody
 
               tokens[heredoc.index] = {
                 ...tokens[heredoc.index]!,
@@ -270,19 +320,21 @@ export function tokenizeShell(command: string): ShellToken[] {
       continue
     }
 
-    const redirectMatch = command.slice(i).match(/^(\d+)?(<<<|>>|<<|>&|<&|>\||>|<)(?:-|\d+)?/)
+    const redirectMatch = command.slice(i).match(/^(?:\d+)?(?:<<<|<<-|>>|<<|>&|<&|<>|>\||>|<)|^&>>?/)
 
     if (redirectMatch !== null && redirectMatch[0] !== undefined) {
       tokens.push({ type: "redirect", value: redirectMatch[0] })
 
-      if (/^\d*<<$/.test(redirectMatch[0])) pendingDelimiter = tokens.length - 1
+      if (/^\d*<<-?$/.test(redirectMatch[0])) pendingDelimiter = tokens.length - 1
       i += redirectMatch[0].length
       continue
     }
 
     let value = ""
+    const wordBytes: number[] = []
     let quoted = false
     let unsupportedDelimiter = false
+    let expansion = false
     const substitutions: string[] = []
 
     while (i < command.length) {
@@ -310,9 +362,13 @@ export function tokenizeShell(command: string): ShellToken[] {
       }
 
       if (current === "$" && command[i + 1] === "'") {
+        wordBytes.push(...Buffer.from(value))
+        value = ""
         quoted = true
         unsupportedDelimiter = true
         i += 2
+        const bytes: number[] = []
+        let complete = false
 
         while (i < command.length) {
           const ansiCharacter = command[i]
@@ -321,25 +377,27 @@ export function tokenizeShell(command: string): ShellToken[] {
 
           if (ansiCharacter === "'") {
             i++
+            complete = true
             break
           }
 
           if (ansiCharacter === "\\" && i + 1 < command.length) {
-            const escaped = command[i + 1]
+            const escaped = ansiEscape(command, i)
 
-            if (escaped === "n") value += "\n"
-            else if (escaped === "t") value += "\t"
-            else if (escaped === "r") value += "\r"
-            else if (escaped === "\\") value += "\\"
-            else if (escaped === "'") value += "'"
-            else if (escaped === '"') value += '"'
-            else value += escaped
-            i += 2
+            bytes.push(...(escaped.byte === undefined ? Buffer.from(escaped.content) : [escaped.byte]))
+            i = escaped.end
           } else {
-            value += ansiCharacter
-            i++
+            const literal = String.fromCodePoint(command.codePointAt(i)!)
+
+            bytes.push(...Buffer.from(literal))
+            i += literal.length
           }
         }
+
+        if (!complete) throw new Error("Cannot parse shell quotes reliably. Run git commit directly.")
+        const nul = bytes.indexOf(0)
+
+        wordBytes.push(...(nul < 0 ? bytes : bytes.slice(0, nul)))
 
         continue
       }
@@ -353,7 +411,8 @@ export function tokenizeShell(command: string): ShellToken[] {
           i++
         }
 
-        if (command[i] === "'") i++
+        if (command[i] !== "'") throw new Error("Cannot parse shell quotes reliably. Run git commit directly.")
+        i++
         continue
       }
 
@@ -382,14 +441,24 @@ export function tokenizeShell(command: string): ShellToken[] {
             const substitution = consumeCommandSubstitution(command, i)
             value += command.slice(i, substitution.end)
             substitutions.push(substitution.content)
+            expansion = true
+            i = substitution.end
+          } else if (quotedCharacter === "`") {
+            const substitution = consumeBackticks(command, i)
+
+            value += command.slice(i, substitution.end)
+            substitutions.push(substitution.content)
+            expansion = true
             i = substitution.end
           } else {
+            if (quotedCharacter === "$" && /[a-zA-Z0-9_{[*#?@!$-]/.test(command[i + 1] ?? "")) expansion = true
             value += quotedCharacter
             i++
           }
         }
 
-        if (command[i] === '"') i++
+        if (command[i] !== '"') throw new Error("Cannot parse shell quotes reliably. Run git commit directly.")
+        i++
         continue
       }
 
@@ -397,11 +466,24 @@ export function tokenizeShell(command: string): ShellToken[] {
         const substitution = consumeCommandSubstitution(command, i)
         value += command.slice(i, substitution.end)
         substitutions.push(substitution.content)
+        expansion = true
         i = substitution.end
         continue
       }
 
-      const nextRedirect = command.slice(i).match(/^(\d+)?(<<<|>>|<<|>&|<&|>\||>|<)(?:-|\d+)?/)
+      if (current === "`") {
+        const substitution = consumeBackticks(command, i)
+
+        value += command.slice(i, substitution.end)
+        substitutions.push(substitution.content)
+        expansion = true
+        i = substitution.end
+        continue
+      }
+
+      if (current === "$" && /[a-zA-Z0-9_{[*#?@!$-]/.test(command[i + 1] ?? "")) expansion = true
+
+      const nextRedirect = command.slice(i).match(/^(?:<<<|<<-|>>|<<|>&|<&|<>|>\||>|<)/)
 
       if (nextRedirect !== null) break
 
@@ -409,14 +491,15 @@ export function tokenizeShell(command: string): ShellToken[] {
       i++
     }
 
-    pushWord(tokens, value, substitutions)
+    if (wordBytes.length > 0) value = Buffer.from([...wordBytes, ...Buffer.from(value)]).toString("utf8")
+    pushWord(tokens, value, substitutions, expansion)
 
     if (pendingDelimiter !== undefined) {
       if (unsupportedDelimiter) {
         throw new Error("Cannot validate an ANSI-C quoted heredoc delimiter. Use a plain quoted delimiter such as <<'EOF'.")
       }
 
-      pendingHeredocs.push({ index: pendingDelimiter, delimiter: value, quoted })
+      pendingHeredocs.push({ index: pendingDelimiter, delimiter: value, quoted, stripTabs: tokens[pendingDelimiter]?.value.endsWith("-") === true })
       pendingDelimiter = undefined
     }
   }
@@ -449,8 +532,8 @@ function splitSimpleCommands(tokens: readonly ShellToken[]): { tokens: ShellToke
   return commands
 }
 
-function extractCommandWords(tokens: readonly ShellToken[]): string[] {
-  const words: string[] = []
+function extractCommandWords(tokens: readonly ShellToken[]): ShellToken[] {
+  const words: ShellToken[] = []
   let i = 0
 
   while (i < tokens.length) {
@@ -459,13 +542,13 @@ function extractCommandWords(tokens: readonly ShellToken[]): string[] {
     if (token === undefined) break
 
     if (token.type === "redirect") {
-      if (!token.value.includes("&") && tokens[i + 1]?.type === "word") i += 2
+      if (tokens[i + 1]?.type === "word") i += 2
       else i++
       continue
     }
 
     if (token.type === "word") {
-      words.push(token.value)
+      words.push(token)
     }
 
     i++
@@ -568,6 +651,7 @@ function findCommandStart(words: readonly string[]): number {
 function extractInvocation(
   words: readonly string[],
   commandStart: number,
+  wordTokens: readonly ShellToken[],
 ): GitCommitInvocation | undefined {
   let wordIndex = commandStart
   const executable = words[wordIndex]
@@ -642,6 +726,8 @@ function extractInvocation(
   let hasNoEdit = false
   let isFixup = false
   let isHelp = false
+  let messageExpansion = false
+  let hasTrailer = false
 
   const collectMessage = (word: string | undefined): void => {
     if (word === undefined) return
@@ -677,8 +763,10 @@ function extractInvocation(
       hasSignoffFlag = false
     } else if (argument === "-m" || argument === "--message") {
       index++
+      messageExpansion ||= wordTokens[index]?.expansion === true
       collectMessage(words[index])
     } else if (argument.startsWith("--message=")) {
+      messageExpansion ||= wordTokens[index]?.expansion === true
       collectMessage(argument.slice("--message=".length))
     } else if (argument === "-F" || argument === "--file") {
       index++
@@ -687,6 +775,10 @@ function extractInvocation(
       collectFile(argument.slice("--file=".length))
     } else if (argument === "--fixup" || argument.startsWith("--fixup=")) {
       isFixup = true
+
+      if (equalsIndex < 0) index++
+    } else if (longOptionName === "--trailer") {
+      hasTrailer = true
 
       if (equalsIndex < 0) index++
     } else if (commitLongOptionsWithArg.has(longOptionName)) {
@@ -708,7 +800,10 @@ function extractInvocation(
             ? attached
             : words[++index]
 
-          if (option === "m") collectMessage(input)
+          if (option === "m") {
+            messageExpansion ||= wordTokens[index]?.expansion === true
+            collectMessage(input)
+          }
           else collectFile(input)
           break
         } else if (option === "S") {
@@ -732,19 +827,60 @@ function extractInvocation(
     isFixup,
     isHelp,
     targetError,
+    messageExpansion,
+    hasTrailer,
   }
 }
 
-export function extractGitCommits(command: string, inheritedDirectoryChange = false): GitCommitInvocation[] {
+export function extractGitCommits(command: string, inheritedDirectoryChange = false, depth = 0): GitCommitInvocation[] {
+  if (depth > 12 || command.length > 262144) throw new Error("Shell parsing limit exceeded. Run git commit directly.")
   const tokens = tokenizeShell(command)
   const invocations: GitCommitInvocation[] = []
   let changedDirectory = inheritedDirectoryChange
 
   for (const simple of splitSimpleCommands(tokens)) {
     const commandTokens = simple.tokens
-    const words = extractCommandWords(commandTokens)
+    const wordTokens = extractCommandWords(commandTokens)
+    const words = wordTokens.map((token) => token.value)
     const commandStart = findCommandStart(words)
-    const invocation = extractInvocation(words, commandStart)
+    const invocation = extractInvocation(words, commandStart, wordTokens)
+
+    if (/^(?:.*\/)?(?:bash|sh|zsh)$/.test(words[commandStart] ?? "")) {
+      let bodyIndex = commandStart + 1
+      let executeString = false
+
+      while (bodyIndex < words.length) {
+        const option = words[bodyIndex]!
+
+        if (option === "--") {
+          bodyIndex++
+          break
+        }
+
+        if (!option.startsWith("-") && !option.startsWith("+")) break
+
+        if (/^-[a-zA-Z]*c[a-zA-Z]*$/.test(option)) executeString = true
+        const shortOptions = /^[+-][a-zA-Z]+$/.test(option)
+
+        if (shortOptions && /[oO]/.test(option) && !/[oO]$/.test(option)) {
+          throw new Error("Cannot parse shell options reliably. Run git commit directly.")
+        }
+
+        const next = words[bodyIndex + 1]
+        const optionName = next !== undefined && !/^[+-]/.test(next)
+
+        bodyIndex += shortOptions && /[oO]$/.test(option) && optionName || ["--rcfile", "--init-file"].includes(option) ? 2 : 1
+      }
+
+      if (executeString) {
+        const body = wordTokens[bodyIndex]
+
+        if (body === undefined || body.expansion) throw new Error("Cannot parse shell -c body reliably. Run git commit directly.")
+        const wrapperChange = words.slice(0, commandStart).some((word) => word === "env" || isAssignment(word))
+
+        invocations.push(...extractGitCommits(body.value, changedDirectory || wrapperChange, depth + 1))
+      }
+    }
 
     if (targetMutators.has(words[commandStart] ?? "") || words.length > 0 && words.every(isAssignment)) changedDirectory = true
 
@@ -788,7 +924,7 @@ export function extractGitCommits(command: string, inheritedDirectoryChange = fa
 
   for (const token of tokens) {
     for (const substitution of token.substitutions ?? []) {
-      invocations.push(...extractGitCommits(substitution, changedDirectory))
+      invocations.push(...extractGitCommits(substitution, changedDirectory, depth + 1))
     }
   }
 

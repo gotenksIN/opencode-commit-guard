@@ -69,11 +69,14 @@ The tokenizer divides the raw command into words, control operators, and redirec
 - Operators: `&&`, `||`, `|&`, `;;`, `;`, `&`, `|`, `\n`, `(`, `)`.
 - Quotes:
   - Single quotes (`'...'`) preserve all characters literally.
-  - Double quotes (`"..."`) interpret escape characters (`\"`, `\\`, `\$`, `` \` ``, `\n`).
-  - ANSI-C quotes (`$'...'`) resolve standard escape codes (`\n`, `\t`, `\r`, etc.).
+  - Double quotes (`"..."`) decode `\"`, `\\`, `\$`, and `` \` ``, and remove backslash-newline continuations.
+    They preserve `\n` literally.
+  - ANSI-C quotes (`$'...'`) decode Bash control, hexadecimal, Unicode, and octal escapes, and preserve the backslash on unknown escapes.
 - Concatenation: Adjacent quoted and unquoted fragments (such as `--message="value"`) combine into a single word token.
 - Line continuation: Backslash newline sequences (`\` + `\n`) are discarded.
 - Redirections: File descriptors and redirect operators (`> /dev/null`, `2>&1`, `< file`) are identified and separated from arguments.
+- Tab-stripping heredocs (`<<-`) remove leading tabs from body lines and the closing delimiter.
+- Message tokens track unquoted and double-quoted expansions without evaluating them.
 
 ### 2. Invocation extraction (`extractGitCommits`)
 
@@ -92,6 +95,8 @@ The extraction pipeline identifies git commit commands:
    - `-s`, `--signoff`, `--no-signoff` update the signoff flag.
    - Combined short flags (such as `-sm "..."`, `-sam "..."`, `-m"..."`) are correctly unpacked.
    - Positional separator `--` terminates flag processing.
+9. Recursively inspects `$()` and backtick substitutions and literal `bash`, `sh`, and `zsh` `-c` bodies.
+   Bounded recursion and incomplete or dynamic shell bodies fail closed with instructions to run Git directly.
 
 ## Validation engine
 
@@ -104,6 +109,8 @@ The validation engine (`src/validator.ts`) enforces commit format invariants.
 - One complete, quoted heredoc attached directly to descriptor 0 of `git commit -F -` supplies a literal message.
 - Pipelines, multiple heredocs, inherited compound-command input, nonzero descriptors, competing stdin redirects, and unquoted delimiters are rejected for `-F -`.
 - The plugin never reads `-F` or `--file` message files because the pre-execution hook has no permission-checked file access boundary.
+- Messages containing shell expansion are rejected; single quotes and ANSI-C quotes supply literal text.
+- `--trailer` is rejected; use a literal trailer in the message body or `-s`.
 - If no message is provided, the invocation is rejected unless it uses `--amend --no-edit` or a generated fixup message.
 - `git commit --amend --no-edit` without a new message retains the existing message without reading or revalidating repository history.
 - Explicit amendment messages are validated without reading repository history.
