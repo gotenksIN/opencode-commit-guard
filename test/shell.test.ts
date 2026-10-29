@@ -111,6 +111,13 @@ describe("tokenizeShell", () => {
 })
 
 describe("extractGitCommits", () => {
+  test("keeps ANSI-C control escapes within their quote boundaries", () => {
+    expect(extractGitCommits(String.raw`echo $'\c'; git commit -m "bad"`)[0]?.messages).toEqual(["bad"])
+    expect(extractGitCommits(String.raw`echo $'\c\\'; git commit -m "bad"`)[0]?.messages).toEqual(["bad"])
+    expect(extractGitCommits(String.raw`git commit -m $'core: a\nb'`)[0]?.messages).toEqual(["core: a\nb"])
+    expect(tokenizeShell(String.raw`echo $'\c' $'\c\\'`).map((token) => token.value)).toEqual(["echo", "\\c", "\x1c"])
+  })
+
   test("keeps attached braces and parameter expansions in their words", () => {
     expect(extractGitCommits('echo ${#x}; git commit -m "bad"')[0]?.messages).toEqual(["bad"])
     expect(extractGitCommits('echo $(echo ${#x}; git commit -m "bad")')[0]?.messages).toEqual(["bad"])

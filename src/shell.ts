@@ -172,10 +172,11 @@ function ansiEscape(command: string, start: number): ANSIEscape {
 
   if (literal !== undefined) return { content: literal, end: start + 2 }
 
-  if (escaped === "c" && command[start + 2] !== undefined) {
+  if (escaped === "c" && command[start + 2] !== undefined && command[start + 2] !== "'") {
     const character = command[start + 2]!
+    const end = start + (character === "\\" && command[start + 3] === "\\" ? 4 : 3)
 
-    return { content: String.fromCharCode(character === "?" ? 127 : character.toUpperCase().charCodeAt(0) & 31), end: start + 3 }
+    return { content: String.fromCharCode(character === "?" ? 127 : character.toUpperCase().charCodeAt(0) & 31), end }
   }
 
   const count = escaped === "x" ? 2 : escaped === "u" ? 4 : escaped === "U" ? 8 : 0
