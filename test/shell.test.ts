@@ -111,6 +111,21 @@ describe("tokenizeShell", () => {
 })
 
 describe("extractGitCommits", () => {
+  test("handles ANSI-C quotes and rejects ambiguous substitution syntax", () => {
+    expect(extractGitCommits(String.raw`echo $(git commit -m "bad"; echo $'a\')')`)[0]?.messages).toEqual(["bad"])
+    expect(() => extractGitCommits(`echo $(git commit -m "bad"; echo "\${x:-")'"}")`)).toThrow("double-quoted parameter expansion")
+    expect(() => extractGitCommits(`echo "$(case x in x) git commit -m "bad"; echo "'" ;; esac)"`)).toThrow("case patterns inside a command substitution")
+    expect(extractGitCommits('echo "$(echo "${HOME}")"; git commit -m "core: ordinary"')[0]?.messages).toEqual(["core: ordinary"])
+    expect(extractGitCommits(String.raw`echo $(echo $'a\nb'); git commit -m "core: ordinary"`)[0]?.messages).toEqual(["core: ordinary"])
+    expect(extractGitCommits('echo "$(printf %s case)"; git commit -m "core: ordinary"')[0]?.messages).toEqual(["core: ordinary"])
+    expect(() => extractGitCommits('echo "$(if true; then case x in x) git commit -m bad;; esac; fi)"')).toThrow("case patterns inside a command substitution")
+    expect(() => extractGitCommits('echo "$(function f { case x in x) git commit -m bad;; esac; }; f)"')).toThrow("function or coproc declarations inside a command substitution")
+    expect(() => extractGitCommits('echo "$(coproc { case x in x) git commit -m bad;; esac; }; wait)"')).toThrow("function or coproc declarations inside a command substitution")
+    expect(() => extractGitCommits('echo "$(time -p { case x in x) git commit -m bad;; esac; })"')).toThrow("case patterns inside a command substitution")
+    expect(() => extractGitCommits('echo "$(time -p -- case x in x) git commit -m bad;; esac)"')).toThrow("case patterns inside a command substitution")
+    expect(() => extractGitCommits('echo "$(time -- case x in x) git commit -m bad;; esac)"')).toThrow("case patterns inside a command substitution")
+  })
+
   test("rejects nested quoting in double-quoted parameter expansions", () => {
     expect(() => extractGitCommits(`echo "\${x:-"'"}"; git commit -m "bad"`)).toThrow("double-quoted parameter expansion")
     expect(extractGitCommits('echo "${HOME}"; git commit -m "core: literal"')[0]?.messages).toEqual(["core: literal"])

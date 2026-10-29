@@ -66,14 +66,27 @@ function isWordSeparator(character: string): boolean {
 function consumeCommandSubstitution(command: string, start: number, nesting = 0): CommandSubstitution {
   if (nesting > 12) throw new Error("Shell parsing limit exceeded. Run git commit directly.")
   let depth = 1
-  let quote: "'" | '"' | undefined
+  let quote: "'" | '"' | "$'" | undefined
   let i = start + 2
   let atWordStart = true
+  let atCommandStart = true
+  let timeOption = false
 
   while (i < command.length) {
     const character = command[i]
 
     if (character === undefined) break
+
+    if (quote === "$'") {
+      if (character === "'") quote = undefined
+      else if (character === "\\") {
+        i = ansiEscape(command, i).end
+        continue
+      }
+
+      i++
+      continue
+    }
 
     if (quote === "'") {
       if (character === "'") quote = undefined
@@ -89,6 +102,8 @@ function consumeCommandSubstitution(command: string, start: number, nesting = 0)
         i++
       } else if (character === "$" && command[i + 1] === "(") {
         i = consumeCommandSubstitution(command, i, nesting + 1).end
+      } else if (character === "$" && command[i + 1] === "{") {
+        i = consumeQuotedParameter(command, i)
       } else {
         i++
       }
@@ -97,8 +112,46 @@ function consumeCommandSubstitution(command: string, start: number, nesting = 0)
     }
 
     if (character === "\\") {
-      if (command[i + 1] !== "\n") atWordStart = false
+      if (command[i + 1] !== "\n") {
+        atWordStart = false
+        atCommandStart = false
+      }
+
       i += i + 1 < command.length ? 2 : 1
+      continue
+    }
+
+    if (atCommandStart && atWordStart && !isWordSeparator(character) && character !== "#") {
+      let word = ""
+
+      for (let end = i; end < command.length; end++) {
+        const next = command[end]!
+
+        if (next === "\\" && command[end + 1] === "\n") {
+          end++
+          continue
+        }
+
+        if (isWordSeparator(next)) break
+        word += next
+      }
+
+      if (word === "case") {
+        throw new Error("Cannot parse case patterns inside a command substitution. Run the case command separately or run git commit directly.")
+      }
+
+      if (word === "function" || word === "coproc") {
+        throw new Error("Cannot parse function or coproc declarations inside a command substitution. Run the declaration separately or run git commit directly.")
+      }
+
+      atCommandStart = timeOption && (word === "-p" || word === "--") || commandPrefixes.has(word) || word === "{"
+      timeOption = word === "time" || timeOption && word === "-p"
+    }
+
+    if (character === "$" && command[i + 1] === "'") {
+      quote = "$'"
+      atWordStart = false
+      i += 2
       continue
     }
 
@@ -131,6 +184,7 @@ function consumeCommandSubstitution(command: string, start: number, nesting = 0)
       depth++
       i++
       atWordStart = true
+      atCommandStart = true
       continue
     }
 
@@ -142,6 +196,11 @@ function consumeCommandSubstitution(command: string, start: number, nesting = 0)
       }
 
       atWordStart = true
+    }
+
+    if ([";", "&", "|", "\n", ")"].includes(character)) {
+      atCommandStart = true
+      timeOption = false
     }
 
     if (isWordSeparator(character)) atWordStart = true

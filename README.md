@@ -159,6 +159,8 @@ Supply the final message literally; message words containing shell expansion are
 Single quotes and ANSI-C quotes (`$'...'`) supply literal text.
 The parser inspects commits inside command substitutions, backticks, and literal `bash`, `sh`, or `zsh` `-c` bodies.
 Use simple double-quoted parameters such as `"${HOME}"`; nested quoting, escapes, and expansions inside these parameters are rejected.
+Run `case` commands outside command substitutions; the parser rejects their ambiguous parentheses.
+Run function and `coproc` declarations outside command substitutions; their compound bodies are rejected there.
 Run Git directly if a shell body is dynamic or cannot be parsed reliably.
 Put trailers in the literal message body or use `-s`; `--trailer` is rejected.
 The guard resolves the signing baseline before reporting message-format violations.
