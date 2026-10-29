@@ -9,6 +9,7 @@ import plugin from "../index.js"
 import { findGitRoot, scopeFor } from "../src/capture.js"
 import { parseConfig } from "../src/config.js"
 import type { JsonValue } from "../src/types.js"
+import { isRecord } from "../src/types.js"
 
 interface HookEvent {
   tool: string
@@ -23,7 +24,7 @@ afterEach(async () => {
   for (const close of teardown.splice(0).reverse()) await close()
 })
 
-async function setupTestPlugin(options: JsonValue = {}, signing: "true" | "false" | "error" | "missing" = "true", directory = import.meta.dir, stored = new Map<string, JsonValue>()) {
+async function setupTestPlugin(options: JsonValue = {}, signing: "true" | "false" | "unset" | "error" | "missing" = "true", directory = import.meta.dir, stored = new Map<string, JsonValue>()) {
   const hooks = new Map<string, ToolHookCallback>()
   const shellHooks = new Map<string, (event: { command: string; cwd: string }) => Effect.Effect<void>>()
   const tools = new Map<string, Tool.Info>()
@@ -155,17 +156,40 @@ async function setupTestPlugin(options: JsonValue = {}, signing: "true" | "false
 
       return command
     },
-    completeCapture: async (command: string, metadata?: JsonValue) => {
+    completeCapture: async (command: string, metadata?: JsonValue, result: Tool.Result = {
+      content: [{ type: "text", text: "RECEIPT_OK\n" }],
+      metadata: isRecord(metadata) ? metadata : undefined,
+    }, id = "capture") => {
       const hook = hooks.get("execute.after")
 
       if (hook === undefined) throw new Error("Capture completion hook is unavailable")
 
+      const event = {
+        tool: "shell", input: { command, workdir: directory },
+        sessionID: "test-session", agent: "build", messageID: "message", id,
+        status: "completed", result,
+      }
+
       // SAFETY: The stub supplies the shell result and tool-call identity fields expected by the hook.
-      await Effect.runPromise(hook({
+      await Effect.runPromise(hook(event as never))
+
+      return event.result
+    },
+    failCapture: async (command: string, error: Tool.Error) => {
+      const hook = hooks.get("execute.after")
+
+      if (hook === undefined) throw new Error("Capture completion hook is unavailable")
+
+      const event = {
         tool: "shell", input: { command, workdir: directory },
         sessionID: "test-session", agent: "build", messageID: "message", id: "capture",
-        status: "completed", result: { metadata },
-      } as never))
+        status: "error", error,
+      }
+
+      // SAFETY: The stub supplies a failed shell result and the claimed tool-call identity.
+      await Effect.runPromise(hook(event as never))
+
+      return event.error
     },
     startCapture: async (command: string) => {
       const hook = shellHooks.get("create.before")
@@ -176,6 +200,92 @@ async function setupTestPlugin(options: JsonValue = {}, signing: "true" | "false
 }
 
 describe("opencode-commit-guard plugin", () => {
+  test("appends frozen guidance to copied capture content and structured output", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "commit-guard-inline-"))
+
+    teardown.push(async () => { rmSync(directory, { recursive: true, force: true }) })
+    expect(Bun.spawnSync(["git", "init", "-q", directory]).exitCode).toBe(0)
+    expect(Bun.spawnSync(["git", "-C", directory, "config", "commit.gpgsign", "true"]).exitCode).toBe(0)
+    const harness = await setupTestPlugin({ allowedScopes: ["core"] }, "missing", directory)
+    const command = await harness.prepareCapture()
+    const metadata = Object.freeze({ status: "completed", exit: 0, truncated: false })
+
+    const parts: readonly Tool.Content[] = Object.freeze([
+      { type: "text", text: "RECEIPT_OK\n" },
+      { type: "file", uri: "file:///receipt", mime: "text/plain" },
+    ])
+
+    const output = Object.freeze({ output: "RECEIPT_OK\n", exit: 0, status: "completed" })
+    const original = Object.freeze({ content: parts, output, metadata })
+
+    expect(Bun.spawnSync(["bash", "-c", command], { cwd: directory }).exitCode).toBe(0)
+    const result = await harness.completeCapture(command, metadata, original)
+
+    await expect(harness.executeBefore("shell", { command: "git commit -s -m 'core: Inline capture'" })).resolves.toBeUndefined()
+    const guidance = await harness.context()
+
+    expect(guidance).toContain(`[commit-guard] Frozen commit baseline for ${directory}.`)
+    expect(guidance).toContain("Configured scope allowlist: core.")
+    expect(guidance).toContain("Add -s or --signoff.")
+    expect(guidance).toContain("A second commit_context call is optional.")
+    expect(result).not.toBe(original)
+    expect(result.content).toEqual([...parts, { type: "text", text: guidance }])
+    expect(result.output).toEqual({ ...output, output: `${output.output}\n\n${guidance}` })
+    expect(result.metadata).toBe(metadata)
+    expect(original.content).toBe(parts)
+    expect(original.output).toBe(output)
+    expect(await harness.context()).toBe(guidance)
+  })
+
+  test("appends the recorded capture failure reason without changing metadata", async () => {
+    const harness = await setupTestPlugin({}, "missing")
+    const command = await harness.prepareCapture()
+    const metadata = { status: "completed", exit: 0, truncated: true }
+    const result = await harness.completeCapture(command, metadata)
+
+    const note = "[commit-guard] This capture did not publish a usable baseline: shell result lacks verified foreground completion metadata.\n" +
+      "RECEIPT_OK alone does not authorize a commit.\nCall commit_context with the same workdir for status and next steps."
+
+    expect(result.content).toEqual([{ type: "text", text: "RECEIPT_OK\n" }, { type: "text", text: note }])
+    expect(result.metadata).toBe(metadata)
+    expect(await harness.context()).toContain("previous capture failed: shell result lacks verified foreground completion metadata")
+  })
+
+  test("appends capture failure guidance to the original shell error message", async () => {
+    const harness = await setupTestPlugin({}, "missing")
+    const command = await harness.prepareCapture()
+    const original = new Tool.Error({ message: "Permission denied by user" })
+    const error = await harness.failCapture(command, original)
+
+    expect(error).toBeInstanceOf(Tool.Error)
+    expect(error).not.toBe(original)
+    expect(error.message).toStartWith("Permission denied by user\n\n[commit-guard] This capture did not publish a usable baseline: shell result did not complete successfully.")
+    expect(error.message).toContain("RECEIPT_OK alone does not authorize a commit.")
+    expect(await harness.context()).toContain("previous capture failed: shell result did not complete successfully")
+  })
+
+  test("leaves unrelated shell results untouched while a capture is claimed", async () => {
+    const harness = await setupTestPlugin({}, "missing")
+
+    await harness.prepareCapture()
+    const original: Tool.Result = { content: "git status output", output: { output: "git status output" }, metadata: { exit: 0 } }
+
+    expect(await harness.completeCapture("git status", undefined, original, "other-call")).toBe(original)
+  })
+
+  test("renders signoff guidance from the frozen effective policy", async () => {
+    for (const required of [true, false]) {
+      const harness = await setupTestPlugin({}, required ? "true" : "false")
+      const guidance = await harness.context()
+
+      expect(guidance).toContain(required ? "Add -s or --signoff." : "Signoff is not required; add it only if repository instructions require it.")
+      expect(guidance).toContain("Signoff is not a cryptographic signature.")
+    }
+
+    const unset = await setupTestPlugin({}, "unset")
+
+    expect(await unset.context()).toContain("Effective commit.gpgsign: unset. Signoff is not required; add it only if repository instructions require it.")
+  })
   test("reports a missing baseline before message format and permits help", async () => {
     const harness = await setupTestPlugin({}, "missing")
 
@@ -276,13 +386,15 @@ describe("opencode-commit-guard plugin", () => {
     const command = await harness.prepareCapture()
 
     expect(Bun.spawnSync(["bash", "-c", command], { cwd: directory }).exitCode).toBe(0)
-    await harness.completeCapture(command, { status: "completed", exit: 0, truncated: false })
+    const result = await harness.completeCapture(command, { status: "completed", exit: 0, truncated: false })
     const message = await harness.context()
 
     expect(message).toContain("Git could not read commit.gpgsign as valid")
     expect(message).toContain("git config --show-origin --get-all commit.gpgsign")
     expect(message).toContain("without changing the intended signing policy")
     expect(message).not.toContain("timeout 15s")
+    expect(message).not.toContain("Frozen commit baseline")
+    expect(result.content).toEqual([{ type: "text", text: "RECEIPT_OK\n" }, { type: "text", text: message }])
     await expect(harness.executeBefore("shell", { command: "git commit -m bad" })).rejects.toThrow("Repeating the capture will not fix it")
   })
 

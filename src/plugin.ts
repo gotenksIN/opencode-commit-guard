@@ -19,11 +19,11 @@ import {
   resolveTargetWorkdir,
   scopeFor,
 } from "./capture.js"
-import type { Pending } from "./capture.js"
+import type { Baseline, Pending } from "./capture.js"
 import { parseConfig } from "./config.js"
 import { extractGitCommits } from "./shell.js"
 import { isJSONString, isRecord } from "./types.js"
-import type { JsonValue } from "./types.js"
+import type { CommitGuardConfig, JsonValue } from "./types.js"
 import { validateGitCommits } from "./validator.js"
 
 export const plugin = Plugin.define({
@@ -145,19 +145,7 @@ export const plugin = Plugin.define({
             const baseline = yield* load(ctx, scope)
 
             if (baseline !== undefined && baseline.directory === findGitRoot(targetWorkdir)) {
-              if (baseline.gpgsign === "error" || baseline.signingkey === "error") return { content: signingError(baseline.gpgsign === "error" ? "commit.gpgsign" : "user.signingkey") }
-              const observed = [...new Set(baseline.messages.map((message) => message.split("\n")[0]?.match(/^([a-zA-Z0-9_./-]{1,40}): /)?.[1]).filter((value) => value !== undefined))].slice(0, 3)
-              const examples = observed.length > 0 ? `Observed scope examples (not an allowlist): ${observed.join(", ")}.\n` : ""
-
-              const scopes = config.allowedScopes === undefined ? "No configured scope allowlist." :
-                `Configured scope allowlist: ${config.allowedScopes.join(", ").slice(0, 512)}.`
-
-              return { content: `Frozen commit baseline for ${targetWorkdir}.\n` +
-                `Use <scope>: <subject>${config.requireScope ? " (required)" : " (optional)"}; maximum line length: ${config.maxLineLength || "unlimited"}.\n` +
-                `${scopes}\n${examples}` +
-                `Effective commit.gpgsign: ${baseline.gpgsign}. Signoff ${baseline.gpgsign === "true" ? "required" : "not required"}; ` +
-                `signoff is not a cryptographic signature. user.signingkey: ${baseline.signingkey === null ? "unset" : "configured"}.\n` +
-                "Set refresh:true after a branch switch, changed signing settings, or changed commit instructions." }
+              return { content: baselineGuidance(baseline, config) }
             }
           }
 
@@ -306,6 +294,7 @@ export const plugin = Plugin.define({
       if (attempt === undefined) return
 
       let published = false
+      let captured: Baseline | undefined
       let reason = "capture import or storage failed"
 
       yield* Effect.gen(function*() {
@@ -342,6 +331,7 @@ export const plugin = Plugin.define({
         published = yield* publish(ctx, attempt, generation, baseline)
 
         if (published) {
+          captured = baseline
           failures.delete(attempt.scope)
           yield* recordState(ctx, attempt, "published")
         }
@@ -354,11 +344,54 @@ export const plugin = Plugin.define({
           yield* invalidateOwned(ctx, attempt)
         }
       }).pipe(Effect.ensuring(Effect.sync(() => cleanup(attempt))))), Effect.catchCause(() => Effect.void))
+
+      const note = published && captured !== undefined ? baselineGuidance(captured, config) :
+        `[commit-guard] This capture did not publish a usable baseline: ${reason.slice(0, 256)}.\n` +
+        "RECEIPT_OK alone does not authorize a commit.\n" +
+        "Call commit_context with the same workdir for status and next steps."
+
+      if (event.status === "error") {
+        event.error = new Tool.Error({ message: `${event.error.message}\n\n${note}` })
+      } else event.result = appendCaptureNote(event.result, note)
     }))
   }),
 })
 
 export default plugin
+
+function baselineGuidance(baseline: Baseline, config: CommitGuardConfig): string {
+  if (baseline.gpgsign === "error" || baseline.signingkey === "error") return signingError(baseline.gpgsign === "error" ? "commit.gpgsign" : "user.signingkey")
+  const observed = [...new Set(baseline.messages.map((message) => message.split("\n")[0]?.match(/^([a-zA-Z0-9_./-]{1,40}): /)?.[1]).filter((value) => value !== undefined))].slice(0, 3)
+  const examples = observed.length > 0 ? `Observed scope examples (not an allowlist): ${observed.join(", ")}.\n` : ""
+
+  const scopes = config.allowedScopes === undefined ? "No configured scope allowlist." :
+    `Configured scope allowlist: ${config.allowedScopes.join(", ").slice(0, 512)}.`
+
+  const signoff = baseline.gpgsign === "true" ? "Add -s or --signoff." :
+    "Signoff is not required; add it only if repository instructions require it."
+
+  return `[commit-guard] Frozen commit baseline for ${baseline.directory.slice(0, 4096)}.\n` +
+    `Use <scope>: <subject>${config.requireScope ? " (required)" : " (optional)"}; maximum line length: ${config.maxLineLength || "unlimited"}.\n` +
+    `${scopes}\n${examples}Effective commit.gpgsign: ${baseline.gpgsign}. ${signoff}\n` +
+    `user.signingkey: ${baseline.signingkey === null ? "unset" : "configured"}. Signoff is not a cryptographic signature.\n` +
+    "A second commit_context call is optional.\n" +
+    "Set refresh:true after a branch switch, changed signing settings, or changed commit instructions."
+}
+
+function appendCaptureNote(result: Tool.Result, note: string): Tool.Result {
+  const content: readonly Tool.Content[] = Array.isArray(result.content) ? result.content :
+    result.content === undefined ? [] : [{ type: "text", text: String(result.content) }]
+
+  // SAFETY: Structured tool output is untrusted JSON; check the record and output field before copying it.
+  const output = result.output as JsonValue | undefined
+  const annotated: Tool.Result = { ...result, content: [...content, { type: "text", text: note }] }
+
+  if (isRecord(output) && isJSONString(output["output"])) {
+    return { ...annotated, output: { ...output, output: `${output["output"]}\n\n${note}` } }
+  }
+
+  return annotated
+}
 
 function signingError(setting: string): string {
   return `[commit-guard] Git could not read ${setting} as valid. Repeating the capture will not fix it. Inspect with git config --show-origin --get-all ${setting}; fix the value without changing the intended signing policy, then call commit_context with refresh:true.`
