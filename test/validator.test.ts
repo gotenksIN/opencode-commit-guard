@@ -289,7 +289,7 @@ describe("validator - file inputs and amend commits", () => {
     }
 
     expect(caught?.message).toContain("Cannot validate a commit message from -F/--file before permission approval")
-    expect(caught?.message).toContain("git commit -s -m $'scope: Subject\n\nBody line one.\nBody line two.'")
+    expect(caught?.message).toContain("git commit -s -m $'scope: Subject\\n\\nBody line one.\\nBody line two.'")
     expect(caught?.message).not.toContain(secret)
   })
 
@@ -339,7 +339,7 @@ describe("validator - error message formatting", () => {
       } catch (error) {
         if (!(error instanceof Error)) throw error
         expect(error.message).toContain(enforceSignoff ? "Signoff required: captured commit.gpgsign=true. Keep -s." : "Signoff not required: captured commit.gpgsign=false|unset.")
-        expect(error.message).toContain(`git commit${enforceSignoff ? " -s" : ""} -m $'core: Subject\n\nBody line one.\nBody line two.'`)
+        expect(error.message).toContain(`git commit${enforceSignoff ? " -s" : ""} -m $'core: Subject\\n\\nBody line one.\\nBody line two.'`)
         expect(error.message).not.toContain("private attempted command")
       }
     }
@@ -364,6 +364,6 @@ describe("validator - error message formatting", () => {
     expect(errorText).toContain("2. Commit message exceeds maximum line length of 72 characters")
     expect(errorText).toContain("3. Missing commit signoff")
     expect(errorText).toContain("Example:")
-    expect(errorText).toContain("git commit -s -m $'scope: Subject\n\nBody line one.\nBody line two.'")
+    expect(errorText).toContain("git commit -s -m $'scope: Subject\\n\\nBody line one.\\nBody line two.'")
   })
 })

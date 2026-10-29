@@ -135,7 +135,7 @@ The validation engine (`src/validator.ts`) enforces commit format invariants.
 When violations occur, the engine throws an Error with:
 - A clear rejection header.
 - A numbered list of specific violations with offending text.
-- One example with the first allowed scope (or `scope`), real body newlines, and `-s` only when signoff is required.
+- One single-line example with the first allowed scope (or `scope`), literal `\n` escapes inside `$'...'`, and `-s` only when signoff is required.
 - The captured signoff policy and bounded violation details, without repeating the attempted command.
 
 ## OpenCode hook integration

@@ -42,7 +42,7 @@ export function createCommitGuardError(
   const scope = config.allowedScopes?.[0] ?? "scope"
 
   const examples = `Signoff ${config.enforceSignoff ? "required: captured commit.gpgsign=true. Keep -s." : "not required: captured commit.gpgsign=false|unset."}\n` +
-    `Example:\n  git commit${config.enforceSignoff ? " -s" : ""} -m $'${scope}: Subject\n\nBody line one.\nBody line two.'`
+    `Example:\n  git commit${config.enforceSignoff ? " -s" : ""} -m $'${scope}: Subject\\n\\nBody line one.\\nBody line two.'`
 
   return new Error(
     `${header}\n\nViolations:\n${violationText}\n\n${examples}`,
