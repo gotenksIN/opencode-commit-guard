@@ -230,8 +230,6 @@ export const plugin = Plugin.define({
             return
           }
 
-          validateGitCommits(invocations, { ...config, enforceSignoff: false }, command)
-
           return { invocations, command, rawInput }
         },
         catch: (error) => new Tool.Error({
@@ -244,7 +242,7 @@ export const plugin = Plugin.define({
           attempt.sessionID === event.sessionID && attempt.agent === event.agent) yield* recordState(ctx, attempt, "claimed")
       }
 
-      if (parsed === undefined) return
+      if (parsed === undefined || parsed.invocations.every((invocation) => invocation.isHelp)) return
 
       if (ctx.location.workspaceID !== undefined) return yield* Effect.fail(new Tool.Error({
         message: "[commit-guard] Remote workspace commits cannot use local commit context. Capture from a verified local checkout.",
@@ -278,10 +276,10 @@ export const plugin = Plugin.define({
 
       if (!baselineValid || baseline === undefined) {
         const relWorkdir = relative(sessionDirectory, expectedDir)
-        const workdirHint = relWorkdir.length > 0 && !relWorkdir.startsWith("..") ? `{ workdir: "${relWorkdir}" }` : ""
+        const workdirHint = JSON.stringify(relWorkdir.length > 0 ? relWorkdir : ".")
 
         return yield* Effect.fail(new Tool.Error({
-          message: `[commit-guard] No valid signing baseline for this checkout. Call commit_context(${workdirHint}), run its authorized foreground shell command, then call commit_context again before committing.`,
+          message: `[commit-guard] No published baseline for ${expectedDir}. Call commit_context({ workdir: ${workdirHint} }), run the returned command unchanged in the foreground with that workdir, then call commit_context again. Commit only after it reports "Frozen commit baseline".`,
         }))
       }
 

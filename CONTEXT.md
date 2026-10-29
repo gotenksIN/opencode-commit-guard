@@ -127,8 +127,8 @@ The validation engine (`src/validator.ts`) enforces commit format invariants.
 When violations occur, the engine throws an Error with:
 - A clear rejection header.
 - A numbered list of specific violations with offending text.
-- Concrete examples of conforming git commit commands.
-- The attempted command string.
+- One example with the first allowed scope (or `scope`), real body newlines, and `-s` only when signoff is required.
+- The captured signoff policy and bounded violation details, without repeating the attempted command.
 
 ## OpenCode hook integration
 
@@ -141,6 +141,8 @@ The plugin (`src/plugin.ts`) wires the validation engine to OpenCode's tool exec
 - Does not read repository history or message files before the shell permission check.
 - Runs `extractGitCommits(command)` and validates all found invocations.
 - Loads a checksum-validated, session-and-worktree-scoped signing baseline from plugin storage.
+- Resolves the baseline before validating message format and signoff once with the captured policy.
+  Help-only invocations do not require a baseline.
 - Rejects missing or invalid baselines, remote workspaces, and commits whose target differs from the captured checkout.
 - Supports Git repositories located at the project root, in subdirectories, or in moved sessions/worktrees.
 - Requires signoff only when the baseline records effective `commit.gpgsign=true`.

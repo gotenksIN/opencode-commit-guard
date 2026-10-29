@@ -288,8 +288,8 @@ describe("validator - file inputs and amend commits", () => {
       if (error instanceof Error) caught = error
     }
 
-    expect(caught?.message).toContain("Cannot validate a commit message from file")
-    expect(caught?.message).toContain('git commit -s -m "kernel: add support for foo"')
+    expect(caught?.message).toContain("Cannot validate a commit message from -F/--file before permission approval")
+    expect(caught?.message).toContain("git commit -s -m $'scope: Subject\n\nBody line one.\nBody line two.'")
     expect(caught?.message).not.toContain(secret)
   })
 
@@ -306,7 +306,7 @@ describe("validator - file inputs and amend commits", () => {
       defaultConfig,
       "git commit --amend --no-edit -F message.txt",
     )).toThrow(
-      'Cannot validate a commit message from file "message.txt"',
+      "Cannot validate a commit message from -F/--file before permission approval",
     )
   })
 
@@ -329,6 +329,21 @@ describe("validator - file inputs and amend commits", () => {
 })
 
 describe("validator - error message formatting", () => {
+  test("uses the captured signoff policy and first allowed scope in one example", () => {
+    for (const enforceSignoff of [true, false]) {
+      const config = { ...defaultConfig, enforceSignoff, allowedScopes: ["core", "docs"] }
+
+      try {
+        validateGitCommits([invocation(["bad"], false)], config, "private attempted command")
+        throw new Error("Expected rejection")
+      } catch (error) {
+        if (!(error instanceof Error)) throw error
+        expect(error.message).toContain(enforceSignoff ? "Signoff required: captured commit.gpgsign=true. Keep -s." : "Signoff not required: captured commit.gpgsign=false|unset.")
+        expect(error.message).toContain(`git commit${enforceSignoff ? " -s" : ""} -m $'core: Subject\n\nBody line one.\nBody line two.'`)
+        expect(error.message).not.toContain("private attempted command")
+      }
+    }
+  })
   test("formats comprehensive error with multiple violations and examples", () => {
     const badMessage = "bad subject without scope and stretching on way too long past seventy-two characters limit"
     const inv = [invocation([badMessage], false)]
@@ -348,7 +363,7 @@ describe("validator - error message formatting", () => {
     expect(errorText).toContain("1. Missing scope in subject line")
     expect(errorText).toContain("2. Commit message exceeds maximum line length of 72 characters")
     expect(errorText).toContain("3. Missing commit signoff")
-    expect(errorText).toContain("Example of a correctly formatted git commit:")
-    expect(errorText).toContain('git commit -s -m "kernel: add support for foo"')
+    expect(errorText).toContain("Example:")
+    expect(errorText).toContain("git commit -s -m $'scope: Subject\n\nBody line one.\nBody line two.'")
   })
 })

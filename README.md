@@ -110,6 +110,8 @@ For conventional commits such as `feat(parser): ...`, the plugin accepts either 
 
 No line in the commit subject or body may exceed the configured character limit (default 72 characters).
 When a line exceeds this limit, the error identifies the exact line number, current character length, and offending text.
+Each `-m` supplies a paragraph, not automatic line wrapping.
+Wrap with real newlines inside `$'...'`; `"\n"` inside double quotes remains literal.
 
 ### 4. Signoff
 
@@ -149,6 +151,8 @@ EOF
 
 The plugin rejects file-backed `-F` or `--file` messages without reading the files.
 It also rejects unquoted or ambiguous standard-input sources.
+The guard resolves the signing baseline before reporting message-format violations.
+`git commit --help` and `git commit -h` do not require a baseline.
 
 ## Development
 

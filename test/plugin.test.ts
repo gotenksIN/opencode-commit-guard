@@ -176,6 +176,16 @@ async function setupTestPlugin(options: JsonValue = {}, signing: "true" | "false
 }
 
 describe("opencode-commit-guard plugin", () => {
+  test("reports a missing baseline before message format and permits help", async () => {
+    const harness = await setupTestPlugin({}, "missing")
+
+    await expect(harness.executeBefore("shell", { command: "git commit -m bad" })).rejects.toThrow("No published baseline")
+
+    for (const flag of ["--help", "-h"]) {
+      await expect(harness.executeBefore("shell", { command: `git commit ${flag}` })).resolves.toBeUndefined()
+    }
+  })
+
   test("reports unclaimed, claimed, failed, and reloaded capture status", async () => {
     const harness = await setupTestPlugin({}, "missing")
     const instructions = await harness.context()
@@ -273,7 +283,7 @@ describe("opencode-commit-guard plugin", () => {
     expect(message).toContain("git config --show-origin --get-all commit.gpgsign")
     expect(message).toContain("without changing the intended signing policy")
     expect(message).not.toContain("timeout 15s")
-    await expect(harness.executeBefore("shell", { command: "git commit -s -m 'core: Subject'" })).rejects.toThrow("Repeating the capture will not fix it")
+    await expect(harness.executeBefore("shell", { command: "git commit -m bad" })).rejects.toThrow("Repeating the capture will not fix it")
   })
 
   test("shares the baseline and refresh across root and subdirectory", async () => {
@@ -291,14 +301,14 @@ describe("opencode-commit-guard plugin", () => {
     await expect(harness.executeBefore("shell", { command: "git commit -s -m 'core: Root'", workdir: directory })).resolves.toBeUndefined()
     expect(await harness.context({ workdir: "sub" })).toContain("Frozen commit baseline")
     await harness.context({ refresh: true, workdir: directory })
-    await expect(harness.executeBefore("shell", { command: "git commit -s -m 'core: Sub'", workdir: subdirectory })).rejects.toThrow("Call commit_context")
+    await expect(harness.executeBefore("shell", { command: "git commit -s -m 'core: Sub'", workdir: subdirectory })).rejects.toThrow("No published baseline")
     const rootCommand = await harness.prepareCapture()
 
     expect(Bun.spawnSync(["bash", "-c", rootCommand], { cwd: directory }).exitCode).toBe(0)
     await harness.completeCapture(rootCommand, { status: "completed", exit: 0, truncated: false })
     await expect(harness.executeBefore("shell", { command: "git commit -s -m 'core: Sub'", workdir: subdirectory })).resolves.toBeUndefined()
     await harness.context({ refresh: true, workdir: "sub" })
-    await expect(harness.executeBefore("shell", { command: "git commit -s -m 'core: Root'", workdir: directory })).rejects.toThrow("Call commit_context")
+    await expect(harness.executeBefore("shell", { command: "git commit -s -m 'core: Root'", workdir: directory })).rejects.toThrow("No published baseline")
   })
 
   test("allows non-shell tools without interception", async () => {

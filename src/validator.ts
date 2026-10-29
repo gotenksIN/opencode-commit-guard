@@ -34,27 +34,25 @@ function validateAllowedScope(
 
 export function createCommitGuardError(
   violations: readonly string[],
-  originalCommand: string,
+  config: CommitGuardConfig,
 ): Error {
   const header = "[commit-guard] Git commit rejected: commit message format rules violated."
   const violationText = violations.map((v, i) => `${i + 1}. ${v}`).join("\n\n")
 
-  const examples = [
-    "Example of a correctly formatted git commit:",
-    '  git commit -s -m "kernel: add support for foo"',
-    '  git commit -s -m "releasetools: fix ota generation" -m "Detailed explanation of why this fix is needed."',
-    '  git commit -m "feat(parser): add subshell support" -m "Signed-off-by: Developer <dev@example.com>"',
-  ].join("\n")
+  const scope = config.allowedScopes?.[0] ?? "scope"
+
+  const examples = `Signoff ${config.enforceSignoff ? "required: captured commit.gpgsign=true. Keep -s." : "not required: captured commit.gpgsign=false|unset."}\n` +
+    `Example:\n  git commit${config.enforceSignoff ? " -s" : ""} -m $'${scope}: Subject\n\nBody line one.\nBody line two.'`
 
   return new Error(
-    `${header}\n\nViolations:\n${violationText}\n\n${examples}\n\nCommand attempted:\n  ${originalCommand}`,
+    `${header}\n\nViolations:\n${violationText}\n\n${examples}`,
   )
 }
 
 export function validateGitCommits(
   invocations: readonly GitCommitInvocation[],
   config: CommitGuardConfig,
-  originalCommand: string,
+  _originalCommand: string,
 ): void {
   const allViolations: string[] = []
 
@@ -70,14 +68,14 @@ export function validateGitCommits(
     if (filePath !== undefined) {
       if (filePath !== "-" || invocation.filePaths.length !== 1) {
         allViolations.push(
-          `Cannot validate a commit message from file "${filePath}" before shell permissions run. Use an inline message, for example: git commit -s -m "kernel: add support for foo".`,
+          "Cannot validate a commit message from -F/--file before permission approval. Use an inline $'...' message or one quoted stdin heredoc.",
         )
         continue
       }
 
       if (invocation.stdinError !== undefined || invocation.stdinMessage === undefined || collectedMessages.length > 0) {
         allViolations.push(
-          `${invocation.stdinError ?? "Cannot combine -F - with -m or unsupported stdin input."} Use one quoted heredoc directly on git commit -s -F - <<'EOF', or use -m "kernel: add support for foo".`,
+          `${invocation.stdinError ?? "Cannot combine -F - with -m or unsupported stdin input."} Use one quoted stdin heredoc or an inline $'...' message.`,
         )
         continue
       }
@@ -144,7 +142,7 @@ export function validateGitCommits(
           )
         } else {
           allViolations.push(
-            `Missing scope in subject line "${subjectLine}". First line must follow "<scope>: <subject>" format (e.g., "kernel: add support for foo" or "feat(parser): add subshell support").`,
+            `Missing scope in subject line "${subjectLine}". First line must follow "<scope>: <subject>" format.`,
           )
         }
       }
@@ -167,7 +165,7 @@ export function validateGitCommits(
           .join("\n")
 
         allViolations.push(
-          `Commit message exceeds maximum line length of ${config.maxLineLength} characters:\n${details}`,
+          `Commit message exceeds maximum line length of ${config.maxLineLength} characters:\n${details}\nEach -m becomes one paragraph line. Wrap with real newlines inside $'...'; "\\n" inside double quotes stays literal.`,
         )
       }
     }
@@ -184,6 +182,6 @@ export function validateGitCommits(
   }
 
   if (allViolations.length > 0) {
-    throw createCommitGuardError(allViolations, originalCommand)
+    throw createCommitGuardError(allViolations.slice(0, 10).map((text) => text.slice(0, 2048)), config)
   }
 }
