@@ -71,7 +71,20 @@ export const plugin = Plugin.define({
 
     yield* ctx.tool.transform((editor) => editor.add({
       name: "commit_context",
-      description: "Prepare a private, permission-checked Git baseline. Run the returned shell command in the foreground, then call this tool again. Specify workdir if the Git repository is in a subdirectory or differs from the project directory. Set refresh to replace a frozen baseline.",
+      description: String.raw`Prepare a Git baseline. Run the returned command unchanged in the foreground; require "Frozen commit baseline".
+Call before your first commit in each session and checkout.
+Set workdir when targeting another repository.
+Run the returned command immediately, unchanged, with the indicated workdir and background:false.
+Do not wrap it or chain another command onto it.
+Commit only after the shell result or this tool reports "Frozen commit baseline".
+RECEIPT_OK alone is insufficient.
+The shell result includes commit rules; a second call is optional.
+Repeat an explicit workdir when checking that checkout.
+Set refresh:true after switching branches, changing signing settings, or changing commit instructions.
+Use literal message text and real body newlines.
+Example: git commit -m $'scope: Subject\n\nBody line one.\nBody line two.'
+Replace scope and follow the returned line-length and signoff rules.
+Add -s only when the returned policy or repository instructions require it.`,
       input: {
         type: "object",
         properties: {
@@ -119,7 +132,7 @@ export const plugin = Plugin.define({
 
         const scope = scopeFor(ctx, toolContext.sessionID, config, targetWorkdir)
 
-        if (preparing.has(scope)) return { content: "A commit context capture is preparing for this session and checkout. Call commit_context again." }
+        if (preparing.has(scope)) return { content: "A commit context capture is preparing for this session and checkout. Wait for its command, then follow its instructions." }
 
         preparing.add(scope)
 
@@ -128,11 +141,11 @@ export const plugin = Plugin.define({
 
           if (previous !== undefined) {
             if (previous.claimed !== undefined && request.refresh !== true) {
-              return { content: "Capture claimed; permission approval or execution is pending. Wait for its foreground shell result, then call commit_context again. RECEIPT_OK confirms only that the artifact was written, not that the baseline was published." }
+              return { content: 'Capture claimed; permission approval or execution is pending. Wait for its foreground shell result. Commit after it reports "Frozen commit baseline"; otherwise call commit_context again with the same workdir before committing. RECEIPT_OK confirms only that the artifact was written, not that the baseline was published.' }
             }
 
             if (request.refresh !== true) {
-              return { content: `Capture still pending and unclaimed. Run this shell command unchanged with workdir ${previous.workdir} and background:false, then call commit_context again. RECEIPT_OK confirms only that the artifact was written, not that the baseline was published:\n${previous.command}` }
+              return { content: captureInstructions(previous, "Capture still pending and unclaimed. ") }
             }
 
             pending.delete(scope)
@@ -158,7 +171,7 @@ export const plugin = Plugin.define({
 
           yield* recordState(ctx, attempt, "prepared")
 
-          return { content: `${status}Run this shell command unchanged with workdir ${targetWorkdir} and background:false, then call commit_context again. RECEIPT_OK confirms only that the artifact was written, not that the baseline was published:\n${attempt.command}` }
+          return { content: captureInstructions(attempt, status) }
         }).pipe(Effect.ensuring(Effect.sync(() => { preparing.delete(scope) })))
       }).pipe(Effect.mapError(() => new Tool.Error({
         message: "[commit-guard] Could not access the session or commit context. Call commit_context again from this checkout.",
@@ -267,7 +280,7 @@ export const plugin = Plugin.define({
         const workdirHint = JSON.stringify(relWorkdir.length > 0 ? relWorkdir : ".")
 
         return yield* Effect.fail(new Tool.Error({
-          message: `[commit-guard] No published baseline for ${expectedDir}. Call commit_context({ workdir: ${workdirHint} }), run the returned command unchanged in the foreground with that workdir, then call commit_context again. Commit only after it reports "Frozen commit baseline".`,
+          message: `[commit-guard] No published baseline for ${expectedDir}. Call commit_context({ workdir: ${workdirHint} }), then run the returned command immediately, unchanged, in the foreground with that workdir and background:false. Do not wrap it or chain another command onto it. Commit after the shell result reports "Frozen commit baseline"; otherwise call commit_context again with the same workdir before committing. RECEIPT_OK alone is insufficient.`,
         }))
       }
 
@@ -358,6 +371,13 @@ export const plugin = Plugin.define({
 })
 
 export default plugin
+
+function captureInstructions(attempt: Pending, status: string): string {
+  return `${status}Run this shell command immediately, unchanged, in the foreground with workdir ${attempt.workdir} and background:false. ` +
+    'Do not wrap it or chain another command onto it. Commit after the shell result reports "Frozen commit baseline"; ' +
+    "otherwise call commit_context again with the same workdir before committing. " +
+    `RECEIPT_OK confirms only that the artifact was written, not that the baseline was published:\n${attempt.command}`
+}
 
 function baselineGuidance(baseline: Baseline, config: CommitGuardConfig): string {
   if (baseline.gpgsign === "error" || baseline.signingkey === "error") return signingError(baseline.gpgsign === "error" ? "commit.gpgsign" : "user.signingkey")

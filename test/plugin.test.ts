@@ -290,6 +290,7 @@ describe("opencode-commit-guard plugin", () => {
     const harness = await setupTestPlugin({}, "missing")
 
     await expect(harness.executeBefore("shell", { command: "git commit -m bad" })).rejects.toThrow("No published baseline")
+    await expect(harness.executeBefore("shell", { command: "git commit -m bad" })).rejects.toThrow('Commit after the shell result reports "Frozen commit baseline"; otherwise call commit_context again')
 
     for (const flag of ["--help", "-h"]) {
       await expect(harness.executeBefore("shell", { command: `git commit ${flag}` })).resolves.toBeUndefined()
@@ -301,12 +302,17 @@ describe("opencode-commit-guard plugin", () => {
     const instructions = await harness.context()
     const command = instructions.split("\n").slice(1).join("\n")
 
+    expect(instructions).toContain("immediately, unchanged, in the foreground")
+    expect(instructions).toContain("Do not wrap it or chain another command onto it.")
+    expect(instructions).toContain('Commit after the shell result reports "Frozen commit baseline"; otherwise call commit_context again')
     await harness.executeBefore("shell", { command: `${command} `, workdir: import.meta.dir })
     expect(await harness.context()).toContain("still pending and unclaimed")
+    expect(await harness.context()).toContain('Commit after the shell result reports "Frozen commit baseline"; otherwise call commit_context again')
     expect(await harness.context()).toContain("RECEIPT_OK confirms only that the artifact was written")
     const claimed = await harness.prepareCapture()
 
     expect(await harness.context()).toContain("Capture claimed")
+    expect(await harness.context()).toContain('Commit after it reports "Frozen commit baseline"; otherwise call commit_context again')
     await harness.completeCapture(claimed, { status: "completed", exit: 0, truncated: true })
     const reloaded = await setupTestPlugin({}, "missing", import.meta.dir, harness.stored)
 

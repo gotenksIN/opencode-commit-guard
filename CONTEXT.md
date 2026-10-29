@@ -161,7 +161,12 @@ The plugin (`src/plugin.ts`) wires the validation engine to OpenCode's tool exec
 The on-demand `commit_context` tool returns a Git capture command for the foreground `shell` tool.
 The tool accepts an optional `workdir` (or `directory` alias) parameter to target a repository located in a subdirectory or worktree.
 When omitted in a non-repository directory, it automatically targets a single sub-repository or lists available repositories.
-Repeat an explicit `workdir` on the follow-up call to read that checkout's baseline.
+Run the returned command immediately, unchanged, with its indicated workdir and `background:false`.
+Do not wrap it or chain another command onto it.
+Commit after the shell result reports `Frozen commit baseline` and follow its commit rules.
+If the result lacks that report, call `commit_context` again for status and next steps.
+A second call is optional after inline success.
+Repeat an explicit `workdir` when you check that checkout.
 An argument-free call prioritizes the session directory's repository over a remembered target.
 The plugin creates a private owner-only artifact and retains its file descriptor before returning the command.
 It claims the exact command against the shell tool-call identity before execution.
@@ -188,6 +193,10 @@ Each scope retains one persisted capture status: prepared, claimed, published, e
 Failure reasons are bounded and explain metadata, artifact, counter, or storage failures on the next context call.
 The plugin also retains up to 128 failure diagnostics in memory if storage fails.
 `RECEIPT_OK` confirms only that the artifact was written, not that the baseline was published.
+The plugin appends one bounded outcome note to claimed capture results, preserving the original content parts and metadata.
+It also appends that note to the structured shell output so Code Mode receives it.
+A failed tool call retains its original error message with the failure note appended.
+The context tool and inline success share identical checkout-root guidance and captured signoff instructions.
 An invalid signing setting produces repair guidance instead of another capture command.
 Inspect its origin, fix the value without changing the intended signing policy, then request `refresh:true`.
 The tool returns only bounded guidance and observed scope examples, never complete historical messages.

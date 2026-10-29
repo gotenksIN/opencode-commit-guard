@@ -61,13 +61,16 @@ You can also specify custom configuration options:
 Call `commit_context` before your first commit in each session and worktree.
 If the Git repository is in a subdirectory or differs from the project root, specify `workdir` (e.g., `commit_context({ workdir: "my-repo" })`).
 If `workdir` is omitted and the project root is not a Git repository, the plugin automatically selects the repository if exactly one exists, or lists available repositories if multiple are present.
-Run the returned command through the foreground `shell` tool with the indicated workdir.
-Run the command unchanged, then call `commit_context` again.
-Commit only after the tool reports `Frozen commit baseline`.
-Repeat the same `workdir` on each call when you select a repository explicitly.
+Run the returned command immediately, unchanged, through the foreground `shell` tool with the indicated workdir and `background:false`.
+Do not wrap it or chain another command onto it.
+Commit after the shell result reports `Frozen commit baseline` and follow its commit rules.
+If the result lacks that report, call `commit_context` again with the same workdir for status and next steps.
+A second call is optional after inline success.
+Repeat an explicit `workdir` when you check that checkout.
 An argument-free call selects the session directory when it is inside a Git repository, even after an explicit selection.
 If the shell result lacks a verified successful process exit, capture again instead of using a partial baseline.
-The command writes full historical messages to a private file and prints only a fixed receipt.
+The command writes full historical messages to a private file and prints a fixed receipt.
+The plugin appends the capture outcome and commit rules to the shell result.
 `RECEIPT_OK` confirms only that the artifact was written, not that the baseline was published.
 The next context call reports whether a capture is unclaimed, awaiting permission or execution, expired, or failed.
 Run an unclaimed command within 20 seconds; a claimed capture does not expire during permission approval.
