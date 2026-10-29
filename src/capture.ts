@@ -195,12 +195,50 @@ export function counter(ctx: Context, scope: string): Effect.Effect<number> {
   })
 }
 
-export function invalidate(ctx: Context, scope: string): Effect.Effect<void> {
+export function invalidate(ctx: Context, scope: string): Effect.Effect<number> {
   return storageLock.withPermits(1)(Effect.gen(function*() {
     const previous = yield* counter(ctx, scope)
 
-    yield* ctx.storage.set(counterKey(scope), previous < 0 ? 1 : previous + 1)
+    const next = previous < 0 ? 1 : previous + 1
+
+    yield* ctx.storage.set(counterKey(scope), next)
+
+    return next
   }))
+}
+
+export function invalidateOwned(ctx: Context, attempt: Pending): Effect.Effect<void> {
+  return storageLock.withPermits(1)(Effect.gen(function*() {
+    if ((yield* counter(ctx, attempt.scope)) === attempt.counter) {
+      yield* ctx.storage.set(counterKey(attempt.scope), attempt.counter + 1)
+    }
+  }))
+}
+
+export type CaptureState = "prepared" | "claimed" | "published" | "expired" | "failed"
+
+export function recordState(ctx: Context, attempt: Pending, state: CaptureState, reason = ""): Effect.Effect<void> {
+  return storageLock.withPermits(1)(Effect.gen(function*() {
+    if ((yield* counter(ctx, attempt.scope)) !== attempt.counter) return
+    yield* ctx.storage.set(`state/${attempt.scope}`, { state, reason: reason.slice(0, 256) })
+  }))
+}
+
+export function captureStatus(ctx: Context, scope: string): Effect.Effect<string> {
+  return Effect.gen(function*() {
+    // SAFETY: Plugin storage contains JSON; validate the record before reading its fields.
+    const value = (yield* ctx.storage.get(`state/${scope}`)) as JsonValue | undefined
+
+    if (!isRecord(value)) return ""
+
+    if (value["state"] === "expired") return "The previous capture expired before its command was claimed; no matching shell result was observed. "
+
+    if (value["state"] === "failed" && isJSONString(value["reason"])) return `The previous capture failed: ${value["reason"]}. `
+
+    if (value["state"] === "prepared" || value["state"] === "claimed") return "The previous capture was interrupted before publication. "
+
+    return ""
+  })
 }
 
 function validBaseline(value: JsonValue | undefined): value is Baseline & Record<string, JsonValue> {

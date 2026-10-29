@@ -62,11 +62,16 @@ Call `commit_context` before your first commit in each session and worktree.
 If the Git repository is in a subdirectory or differs from the project root, specify `workdir` (e.g., `commit_context({ workdir: "my-repo" })`).
 If `workdir` is omitted and the project root is not a Git repository, the plugin automatically selects the repository if exactly one exists, or lists available repositories if multiple are present.
 Run the returned command through the foreground `shell` tool with the indicated workdir.
-Call `commit_context` again to read concise guidance.
+Run the command unchanged, then call `commit_context` again.
+Commit only after the tool reports `Frozen commit baseline`.
 Repeat the same `workdir` on each call when you select a repository explicitly.
 An argument-free call selects the session directory when it is inside a Git repository, even after an explicit selection.
 If the shell result lacks a verified successful process exit, capture again instead of using a partial baseline.
 The command writes full historical messages to a private file and prints only a fixed receipt.
+`RECEIPT_OK` confirms only that the artifact was written, not that the baseline was published.
+The next context call reports whether a capture is unclaimed, awaiting permission or execution, expired, or failed.
+Run an unclaimed command within 20 seconds; a claimed capture does not expire during permission approval.
+Expired unclaimed captures release their private files on later context or tool calls.
 The plugin does not put complete historical messages into tool results or model context.
 Set `refresh: true` after a branch switch, a signing setting change, or a change to commit instructions.
 A failed refresh does not restore the previous baseline.
@@ -108,7 +113,10 @@ When a line exceeds this limit, the error identifies the exact line number, curr
 
 When the captured effective `commit.gpgsign` is `true`, every commit with a supplied message must include a signoff indicator.
 When it is `false` or unset, signoff is not required.
-An invalid or missing signing snapshot blocks the commit until you capture context again.
+A missing signing snapshot blocks the commit until you capture context.
+An invalid signing setting requires a configuration repair, not repeated capture.
+Inspect it with `git config --show-origin --get-all commit.gpgsign` (or `user.signingkey`).
+Fix the value without changing the intended signing policy, then call `commit_context({ refresh: true })`.
 You can provide this either via flags or directly in the message body:
 
 - Pass `-s` or `--signoff` in the git command.

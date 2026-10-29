@@ -5,15 +5,17 @@ import { randomUUID } from "node:crypto"
 import { existsSync, realpathSync } from "node:fs"
 import { relative, resolve } from "node:path"
 import {
-  captureTimeout,
+  captureStatus,
   cleanup,
   counter,
   createPending,
   findGitRoot,
   importCapture,
   invalidate,
+  invalidateOwned,
   load,
   publish,
+  recordState,
   resolveTargetWorkdir,
   scopeFor,
 } from "./capture.js"
@@ -36,11 +38,32 @@ export const plugin = Plugin.define({
     const pending = new Map<string, Pending>()
     const preparing = new Set<string>()
     const lastSessionWorkdir = new Map<string, string>()
+    const failures = new Map<string, string>()
+
+    const rememberFailure = (scope: string, reason: string) => {
+      failures.delete(scope)
+      failures.set(scope, `The previous capture failed: ${reason.slice(0, 256)}. `)
+
+      if (failures.size > 128) failures.delete(failures.keys().next().value!)
+    }
+
+    const sweep = () => Effect.gen(function*() {
+      for (const attempt of [...pending.values()].slice(0, 32)) {
+        pending.delete(attempt.scope)
+
+        if (attempt.claimed === undefined && Date.now() >= attempt.expires) {
+          cleanup(attempt)
+          yield* recordState(ctx, attempt, "expired")
+          yield* invalidateOwned(ctx, attempt)
+        } else pending.set(attempt.scope, attempt)
+      }
+    })
 
     yield* Effect.addFinalizer(() => Effect.gen(function*() {
       for (const attempt of pending.values()) {
         cleanup(attempt)
-        yield* invalidate(ctx, attempt.scope)
+        yield* recordState(ctx, attempt, "failed", "plugin unloaded before publication")
+        yield* invalidateOwned(ctx, attempt)
       }
 
       pending.clear()
@@ -59,6 +82,8 @@ export const plugin = Plugin.define({
         additionalProperties: false,
       },
       execute: (input, toolContext) => Effect.gen(function*() {
+        yield* sweep()
+
         if (ctx.location.workspaceID !== undefined) return { content: "Commit context capture is unavailable for remote workspaces." }
 
         const session = yield* ctx.session.get({ sessionID: toolContext.sessionID })
@@ -102,19 +127,25 @@ export const plugin = Plugin.define({
           const previous = pending.get(scope)
 
           if (previous !== undefined) {
-            if (Date.now() < previous.expires && request.refresh !== true) {
-              return { content: `Run this shell command with workdir ${previous.workdir} and background:false, then call commit_context again:\n${previous.command}` }
+            if (previous.claimed !== undefined && request.refresh !== true) {
+              return { content: "Capture claimed; permission approval or execution is pending. Wait for its foreground shell result, then call commit_context again. RECEIPT_OK confirms only that the artifact was written, not that the baseline was published." }
+            }
+
+            if (request.refresh !== true) {
+              return { content: `Capture still pending and unclaimed. Run this shell command unchanged with workdir ${previous.workdir} and background:false, then call commit_context again. RECEIPT_OK confirms only that the artifact was written, not that the baseline was published:\n${previous.command}` }
             }
 
             pending.delete(scope)
             cleanup(previous)
-            yield* invalidate(ctx, scope)
+            yield* recordState(ctx, previous, "failed", "capture replaced by refresh")
+            yield* invalidateOwned(ctx, previous)
           }
 
           if (request.refresh !== true) {
             const baseline = yield* load(ctx, scope)
 
-            if (baseline !== undefined && (baseline.workdir === targetWorkdir || baseline.directory === targetWorkdir) && baseline.gpgsign !== "error" && baseline.signingkey !== "error") {
+            if (baseline !== undefined && (baseline.workdir === targetWorkdir || baseline.directory === targetWorkdir)) {
+              if (baseline.gpgsign === "error" || baseline.signingkey === "error") return { content: signingError(baseline.gpgsign === "error" ? "commit.gpgsign" : "user.signingkey") }
               const observed = [...new Set(baseline.messages.map((message) => message.split("\n")[0]?.match(/^([a-zA-Z0-9_./-]{1,40}): /)?.[1]).filter((value) => value !== undefined))].slice(0, 3)
               const examples = observed.length > 0 ? `Observed scope examples (not an allowlist): ${observed.join(", ")}.\n` : ""
 
@@ -130,29 +161,25 @@ export const plugin = Plugin.define({
             }
           }
 
-          if (request.refresh === true) yield* invalidate(ctx, scope)
-
-          const count = yield* counter(ctx, scope)
+          const count = yield* invalidate(ctx, scope)
           const attempt = yield* Effect.sync(() => createPending(scope, toolContext.sessionID, toolContext.agent, count, targetWorkdir))
 
           pending.set(scope, attempt)
 
-          return { content: `Run this shell command with workdir ${targetWorkdir} and background:false, then call commit_context again:\n${attempt.command}` }
+          const status = failures.get(scope) ?? (yield* captureStatus(ctx, scope))
+
+          yield* recordState(ctx, attempt, "prepared")
+
+          return { content: `${status}Run this shell command unchanged with workdir ${targetWorkdir} and background:false, then call commit_context again. RECEIPT_OK confirms only that the artifact was written, not that the baseline was published:\n${attempt.command}` }
         }).pipe(Effect.ensuring(Effect.sync(() => { preparing.delete(scope) })))
       }).pipe(Effect.mapError(() => new Tool.Error({
         message: "[commit-guard] Could not access the session or commit context. Call commit_context again from this checkout.",
       }))),
     }))
 
-    yield* ctx.shell.hook("create.before", (event) => Effect.sync(() => {
-      for (const attempt of pending.values()) {
-        if (attempt.claimed !== undefined && event.command === attempt.command && event.cwd === attempt.workdir) {
-          attempt.expires = Date.now() + captureTimeout
-        }
-      }
-    }))
-
     yield* ctx.tool.hook("execute.before", (event) => Effect.gen(function*() {
+      yield* sweep()
+
       const captureSession = event.tool === "shell" || event.tool === "bash"
         ? yield* ctx.session.get({ sessionID: event.sessionID }) : undefined
 
@@ -193,7 +220,6 @@ export const plugin = Plugin.define({
             }
 
             attempt.claimed = { messageID: event.messageID, id: event.id }
-            attempt.expires = Date.now() + captureTimeout
 
             return
           }
@@ -212,6 +238,11 @@ export const plugin = Plugin.define({
           message: error instanceof Error ? error.message : "[commit-guard] Git commit validation failed.",
         }),
       })
+
+      for (const attempt of pending.values()) {
+        if (attempt.claimed?.messageID === event.messageID && attempt.claimed.id === event.id &&
+          attempt.sessionID === event.sessionID && attempt.agent === event.agent) yield* recordState(ctx, attempt, "claimed")
+      }
 
       if (parsed === undefined) return
 
@@ -248,8 +279,7 @@ export const plugin = Plugin.define({
 
       const baselineValid = baseline !== undefined &&
         targetGitRoot !== undefined && baseline.directory === targetGitRoot &&
-        (baseline.workdir === effectiveWorkdir || baseline.directory === expectedDir) &&
-        baseline.gpgsign !== "error" && baseline.signingkey !== "error"
+        (baseline.workdir === effectiveWorkdir || baseline.directory === expectedDir)
 
       if (!baselineValid || baseline === undefined) {
         const relWorkdir = relative(sessionDirectory, expectedDir)
@@ -259,6 +289,10 @@ export const plugin = Plugin.define({
           message: `[commit-guard] No valid signing baseline for this checkout. Call commit_context(${workdirHint}), run its authorized foreground shell command, then call commit_context again before committing.`,
         }))
       }
+
+      if (baseline.gpgsign === "error" || baseline.signingkey === "error") return yield* Effect.fail(new Tool.Error({
+        message: signingError(baseline.gpgsign === "error" ? "commit.gpgsign" : "user.signingkey"),
+      }))
 
       yield* Effect.try({
         try: () => validateGitCommits(parsed.invocations, { ...config, enforceSignoff: baseline.gpgsign === "true" }, parsed.command),
@@ -279,12 +313,19 @@ export const plugin = Plugin.define({
       if (attempt === undefined) return
 
       let published = false
+      let reason = "capture import or storage failed"
 
       yield* Effect.gen(function*() {
-        if (event.status !== "completed" || Date.now() >= attempt.expires ||
-          (yield* counter(ctx, attempt.scope)) !== attempt.counter) return
+        reason = "shell result did not complete successfully"
+
+        if (event.status !== "completed") return
+        reason = "capture was superseded by a refresh"
+
+        if ((yield* counter(ctx, attempt.scope)) !== attempt.counter) return
         // SAFETY: Tool result metadata is untrusted JSON; verify every required field before import.
         const metadata = event.result.metadata as JsonValue | undefined
+
+        reason = "shell result lacks verified foreground completion metadata"
 
         if (!isRecord(metadata)) return
 
@@ -296,21 +337,36 @@ export const plugin = Plugin.define({
 
         const session = yield* Effect.orElseSucceed(ctx.session.get({ sessionID: event.sessionID }), () => undefined)
 
+        reason = "capture session or workspace no longer matches"
+
         if (session === undefined || session.location.workspaceID !== ctx.location.workspaceID) return
 
+        reason = "private artifact is invalid or incomplete (END required)"
         const baseline = yield* Effect.try({ try: () => importCapture(attempt), catch: () => new Error("Invalid capture") })
 
         if (baseline.workdir !== attempt.workdir || ctx.location.workspaceID !== undefined) return
+        reason = "capture storage failed or its counter changed"
         published = yield* publish(ctx, attempt, generation, baseline)
+
+        if (published) {
+          failures.delete(attempt.scope)
+          yield* recordState(ctx, attempt, "published")
+        }
       }).pipe(Effect.onExit(() => Effect.gen(function*() {
         if (pending.get(attempt.scope) === attempt) pending.delete(attempt.scope)
 
-        if (!published) yield* invalidate(ctx, attempt.scope)
-
-        yield* Effect.sync(() => cleanup(attempt))
-      })), Effect.catchCause(() => Effect.void))
+        if (!published) {
+          rememberFailure(attempt.scope, reason)
+          yield* recordState(ctx, attempt, "failed", reason).pipe(Effect.catchCause(() => Effect.void))
+          yield* invalidateOwned(ctx, attempt)
+        }
+      }).pipe(Effect.ensuring(Effect.sync(() => cleanup(attempt))))), Effect.catchCause(() => Effect.void))
     }))
   }),
 })
 
 export default plugin
+
+function signingError(setting: string): string {
+  return `[commit-guard] Git could not read ${setting} as valid. Repeating the capture will not fix it. Inspect with git config --show-origin --get-all ${setting}; fix the value without changing the intended signing policy, then call commit_context with refresh:true.`
+}

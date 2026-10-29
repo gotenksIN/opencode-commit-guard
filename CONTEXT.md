@@ -160,13 +160,25 @@ This is the tool-result status, not `Shell.Info.status`, which uses `exited`.
 A continued background call reports `status: "running"` and `shellID`; a timeout reports `timeout: true` with no exit; a killed call reports an `execute.after` error without result metadata.
 The importer requires the observed successful metadata combination, rejects unrecognized or absent fields, and separately requires the artifact end sentinel.
 It also validates bounded artifact framing, ownership, size, and a final end sentinel through that descriptor.
-The plugin extends the attempt's deadline when `execute.before` claims the exact command and again when the shell process is created after permission approval.
-The shell-creation hook only updates the deadline; it does not read Git.
+An unclaimed attempt has a 20-second admission deadline.
+Once `execute.before` claims it, permission approval and execution do not expire the attempt.
+The host calls `create.before` before permission approval, not after it.
+The shell command's process timeout and verified result metadata bound execution.
+Each context or pre-execution call sweeps up to 32 pending entries and removes expired unclaimed artifacts and descriptors.
+The sweep never removes claimed attempts.
 Git reference failures cannot be inferred to mean detached or unborn HEAD; an unborn HEAD requires a readable symbolic reference and a successful status check.
 Only then does it store a checksum-protected snapshot under a unique key.
 The snapshot contains the checkout identity, branch, HEAD, up to ten full messages, and effective signing settings.
 Storage scopes include schema, project, session, location, and policy revision.
 A persisted invalidation counter prevents a late snapshot from replacing a refreshed or cancelled baseline.
+Each prepared attempt reserves a distinct counter under the storage lock, including captures prepared after plugin reload.
+Cleanup compares and increments this counter atomically, only while the attempt still owns it.
+Each scope retains one persisted capture status: prepared, claimed, published, expired, or failed.
+Failure reasons are bounded and explain metadata, artifact, counter, or storage failures on the next context call.
+The plugin also retains up to 128 failure diagnostics in memory if storage fails.
+`RECEIPT_OK` confirms only that the artifact was written, not that the baseline was published.
+An invalid signing setting produces repair guidance instead of another capture command.
+Inspect its origin, fix the value without changing the intended signing policy, then request `refresh:true`.
 The tool returns only bounded guidance and observed scope examples, never complete historical messages.
 Refresh the frozen baseline after a branch switch, signing setting change, or changed commit instructions.
 The plugin does not detect configuration changes or repository replacement at the same path without another authorized capture.
