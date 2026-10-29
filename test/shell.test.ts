@@ -111,6 +111,28 @@ describe("tokenizeShell", () => {
 })
 
 describe("extractGitCommits", () => {
+  test("keeps attached braces and parameter expansions in their words", () => {
+    expect(extractGitCommits('echo ${#x}; git commit -m "bad"')[0]?.messages).toEqual(["bad"])
+    expect(extractGitCommits('echo $(echo ${#x}; git commit -m "bad")')[0]?.messages).toEqual(["bad"])
+    const commit = extractGitCommits('git commit -s -m "core: valid"{} --no-signoff --trailer "X: y" -F /etc/passwd')[0]
+    expect(commit?.messages).toEqual(["core: valid{}"])
+    expect(commit?.hasSignoffFlag).toBe(false)
+    expect(commit?.hasTrailer).toBe(true)
+    expect(commit?.filePaths).toEqual(["/etc/passwd"])
+    expect(extractGitCommits('echo ${x}; { echo a; git commit -m "core: grouped"; }')[0]?.messages).toEqual(["core: grouped"])
+    expect(extractGitCommits('echo { git commit -m bad }')).toEqual([])
+    expect(extractGitCommits('bash -c \'function f { git commit -m bad; }; f\'')[0]?.messages).toEqual(["bad"])
+    expect(extractGitCommits('echo function f { git commit -m bad }')).toEqual([])
+    expect(extractGitCommits('{\\\n git commit -m bad; }')[0]?.messages).toEqual(["bad"])
+    expect(tokenizeShell('echo {\\\nattached}')[1]?.value).toBe("{attached}")
+    expect(extractGitCommits('bash -c \'time -p { git commit -m bad; }\'')[0]?.messages).toEqual(["bad"])
+    expect(extractGitCommits('bash -c \'coproc { git commit -m bad; }; wait\'')[0]?.messages).toEqual(["bad"])
+    expect(extractGitCommits('bash -c \'coproc worker { git commit -m bad; }; wait\'')[0]?.messages).toEqual(["bad"])
+    expect(extractGitCommits('bash -c \'time -p ! { git commit -m bad; }\'')[0]?.messages).toEqual(["bad"])
+    expect(extractGitCommits('bash -c \'time -p -- { git commit -m bad; }\'')[0]?.messages).toEqual(["bad"])
+    expect(extractGitCommits('bash -c \'time -- ! { git commit -m bad; }\'')[0]?.messages).toEqual(["bad"])
+  })
+
   test("detects commands after every supported redirect form", () => {
     for (const redirect of [">123", "2>& 1", "2>&1", ">& 1", "&>out", "&>>out", "3>out", ">>out", "<in", "<<<text", "<>file", ">|out"]) {
       expect(extractGitCommits(`${redirect} git commit -m "bad"`)[0]?.messages).toEqual(["bad"])

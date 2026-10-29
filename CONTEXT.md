@@ -74,6 +74,10 @@ The tokenizer divides the raw command into words, control operators, and redirec
     They preserve `\n` literally.
   - ANSI-C quotes (`$'...'`) decode Bash control, hexadecimal, Unicode, and octal escapes, and preserve the backslash on unknown escapes.
 - Concatenation: Adjacent quoted and unquoted fragments (such as `--message="value"`) combine into a single word token.
+- Braces separate commands only as standalone reserved words at command positions; attached braces remain part of their word.
+  Function declarations, `time -p`, and `coproc` also introduce brace groups.
+  Prefix combinations such as `time -p -- !` retain their command position.
+  Brace boundaries ignore backslash-newline continuations.
 - Line continuation: Backslash newline sequences (`\` + `\n`) are discarded.
 - Redirections: File descriptors and redirect operators (`> /dev/null`, `2>&1`, `< file`) are identified and separated from arguments.
 - Tab-stripping heredocs (`<<-`) remove leading tabs from body lines and the closing delimiter.

@@ -59,9 +59,7 @@ function isWordSeparator(character: string): boolean {
     character === "&" ||
     character === "|" ||
     character === "(" ||
-    character === ")" ||
-    character === "{" ||
-    character === "}"
+    character === ")"
   )
 }
 
@@ -257,6 +255,44 @@ export function tokenizeShell(command: string): ShellToken[] {
     }
 
     const twoCharacters = command.slice(i, i + 2)
+    let standaloneBrace = false
+
+    if (character === "{" || character === "}") {
+      let commandPosition = true
+
+      for (let index = tokens.length - 1; index >= 0; index--) {
+        const token = tokens[index]!
+
+        if (token.type === "operator") break
+
+        if (token.type === "word") {
+          const precedingWord = tokens[index - 1]?.type === "word" ? tokens[index - 1]?.value : undefined
+
+          if (index === tokens.length - 1 && token.value === "coproc") continue
+
+          if (token.value === "--" && (precedingWord === "time" || precedingWord === "-p" &&
+            tokens[index - 2]?.type === "word" && tokens[index - 2]?.value === "time")) continue
+
+          if (index === tokens.length - 1 && (precedingWord === "function" || precedingWord === "coproc") ||
+            precedingWord === "time" && token.value === "-p") {
+            index--
+            continue
+          }
+        }
+
+        if (token.type !== "word" || !commandPrefixes.has(token.value)) {
+          commandPosition = false
+          break
+        }
+      }
+
+      let braceEnd = i + 1
+
+      while (command[braceEnd] === "\\" && command[braceEnd + 1] === "\n") braceEnd += 2
+
+      standaloneBrace = commandPosition &&
+        (command[braceEnd] === undefined || isWordSeparator(command[braceEnd]!) || command[braceEnd] === "<" || command[braceEnd] === ">")
+    }
 
     if (
       twoCharacters === "&&" ||
@@ -276,8 +312,7 @@ export function tokenizeShell(command: string): ShellToken[] {
       character === "\n" ||
       character === "(" ||
       character === ")" ||
-      character === "{" ||
-      character === "}"
+      standaloneBrace
     ) {
       tokens.push({ type: "operator", value: character })
       i++
