@@ -111,6 +111,20 @@ describe("tokenizeShell", () => {
 })
 
 describe("extractGitCommits", () => {
+  test("joins unquoted heredoc continuations before delimiter matching", () => {
+    const command = 'cat <<EOF\nhello \\\nEOF\n\'\nEOF\ngit commit -m "bad"'
+
+    expect(extractGitCommits(command)[0]?.messages).toEqual(["bad"])
+    expect(tokenizeShell(command).find((token) => token.heredoc)?.heredoc?.body).toBe("hello EOF\n'\n")
+    expect(extractGitCommits('cat <<EOF\nE\\\nOF\ngit commit -m "bad"')[0]?.messages).toEqual(["bad"])
+    expect(extractGitCommits('cat <<EOF\nhello \\\\\nEOF\ngit commit -m "core: ordinary"')[0]?.messages).toEqual(["core: ordinary"])
+    expect(tokenizeShell("cat <<'EOF'\nhello \\\nEOF\n").find((token) => token.heredoc)?.heredoc?.body).toBe("hello \\\n")
+    expect(tokenizeShell('cat <<EOF\n$(echo one \\\n two)\nEOF\n').find((token) => token.heredoc)?.substitutions).toEqual(["echo one  two"])
+    expect(extractGitCommits('cat <<EOF\n' + "\\".repeat(3) + '\n$(git commit -m bad)\nEOF\n')[0]?.messages).toEqual(["bad"])
+    expect(extractGitCommits('cat <<EOF\n' + "\\".repeat(2) + '$(git commit -m bad)\nEOF\n')[0]?.messages).toEqual(["bad"])
+    expect(extractGitCommits('cat <<EOF\n\\$(git commit -m bad)\nEOF\n')).toEqual([])
+  })
+
   test("rejects nonportable ANSI-C quoting in sh command bodies", () => {
     expect(() => extractGitCommits(String.raw`sh -c "echo \$'\\\\'; git commit -m bad"`)).toThrow("quoting portably in sh -c")
     expect(() => extractGitCommits(String.raw`/bin/sh -c "echo \$'\\\\'; git commit -m bad"`)).toThrow("quoting portably in sh -c")

@@ -83,6 +83,8 @@ The tokenizer divides the raw command into words, control operators, and redirec
 - Line continuation: Backslash newline sequences (`\` + `\n`) are discarded.
 - Redirections: File descriptors and redirect operators (`> /dev/null`, `2>&1`, `< file`) are identified and separated from arguments.
 - Tab-stripping heredocs (`<<-`) remove leading tabs from body lines and the closing delimiter.
+- Unquoted heredocs join backslash-newline continuations before delimiter matching and substitution inspection; quoted heredocs preserve them.
+  Substitution inspection consumes escaped backslash pairs before checking whether a dollar sign is escaped.
 - Message tokens track unquoted and double-quoted expansions without evaluating them.
 - Unterminated quotes fail closed with the quote kind and the position of the opening quote.
 

@@ -285,7 +285,7 @@ function heredocSubstitutions(body: string): string[] {
   const substitutions: string[] = []
 
   for (let i = 0; i < body.length; i++) {
-    if (body[i] === "\\" && (body[i + 1] === "$" || body[i + 1] === "`")) {
+    if (body[i] === "\\" && ["\\", "$", "`"].includes(body[i + 1] ?? "")) {
       i++
     } else if (body[i] === "`") {
       throw new Error("Cannot validate command substitutions in an unquoted heredoc. Quote the delimiter, for example: <<'EOF'.")
@@ -391,19 +391,35 @@ export function tokenizeShell(command: string): ShellToken[] {
 
       if (character === "\n" && pendingHeredocs.length > 0) {
         for (const heredoc of pendingHeredocs) {
-          const bodyStart = i
+          let body = ""
           let complete = false
 
           while (i < command.length) {
-            const lineEnd = command.indexOf("\n", i)
-            const end = lineEnd < 0 ? command.length : lineEnd
-            const line = command.slice(i, end)
-            i = lineEnd < 0 ? end : end + 1
+            let line = ""
+            let newline = false
 
-            if ((heredoc.stripTabs ? line.replace(/^\t+/, "") : line) === heredoc.delimiter) {
+            while (i < command.length) {
+              const lineEnd = command.indexOf("\n", i)
+              const end = lineEnd < 0 ? command.length : lineEnd
+              const physicalLine = command.slice(i, end)
+              const backslashes = physicalLine.match(/\\+$/)?.[0].length ?? 0
+
+              newline = lineEnd >= 0
+              i = newline ? end + 1 : end
+
+              if (!heredoc.quoted && newline && backslashes % 2 === 1) {
+                line += physicalLine.slice(0, -1)
+                continue
+              }
+
+              line += physicalLine
+              break
+            }
+
+            if (heredoc.stripTabs) line = line.replace(/^\t+/, "")
+
+            if (line === heredoc.delimiter) {
               complete = true
-              const rawBody = command.slice(bodyStart, i - (line.length + (lineEnd < 0 ? 0 : 1)))
-              const body = heredoc.stripTabs ? rawBody.replace(/^\t+/gm, "") : rawBody
 
               tokens[heredoc.index] = {
                 ...tokens[heredoc.index]!,
@@ -414,6 +430,8 @@ export function tokenizeShell(command: string): ShellToken[] {
               }
               break
             }
+
+            body += line + (newline ? "\n" : "")
           }
 
           if (!complete) {
