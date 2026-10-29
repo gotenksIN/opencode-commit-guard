@@ -78,6 +78,7 @@ The tokenizer divides the raw command into words, control operators, and redirec
 - Redirections: File descriptors and redirect operators (`> /dev/null`, `2>&1`, `< file`) are identified and separated from arguments.
 - Tab-stripping heredocs (`<<-`) remove leading tabs from body lines and the closing delimiter.
 - Message tokens track unquoted and double-quoted expansions without evaluating them.
+- Unterminated quotes fail closed with the quote kind and the position of the opening quote.
 
 ### 2. Invocation extraction (`extractGitCommits`)
 

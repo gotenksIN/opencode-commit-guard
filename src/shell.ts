@@ -362,6 +362,8 @@ export function tokenizeShell(command: string): ShellToken[] {
       }
 
       if (current === "$" && command[i + 1] === "'") {
+        const quoteStart = i
+
         wordBytes.push(...Buffer.from(value))
         value = ""
         quoted = true
@@ -394,7 +396,10 @@ export function tokenizeShell(command: string): ShellToken[] {
           }
         }
 
-        if (!complete) throw new Error("Cannot parse shell quotes reliably. Run git commit directly.")
+        if (!complete) throw new Error(
+          `Unterminated ANSI-C quote starting at character ${quoteStart + 1}. Close the quote before running the command.`,
+        )
+
         const nul = bytes.indexOf(0)
 
         wordBytes.push(...(nul < 0 ? bytes : bytes.slice(0, nul)))
@@ -403,6 +408,8 @@ export function tokenizeShell(command: string): ShellToken[] {
       }
 
       if (current === "'") {
+        const quoteStart = i
+
         quoted = true
         i++
 
@@ -411,12 +418,17 @@ export function tokenizeShell(command: string): ShellToken[] {
           i++
         }
 
-        if (command[i] !== "'") throw new Error("Cannot parse shell quotes reliably. Run git commit directly.")
+        if (command[i] !== "'") throw new Error(
+          `Unterminated single quote starting at character ${quoteStart + 1}. Close the quote before running the command.`,
+        )
+
         i++
         continue
       }
 
       if (current === '"') {
+        const quoteStart = i
+
         quoted = true
         i++
 
@@ -457,7 +469,10 @@ export function tokenizeShell(command: string): ShellToken[] {
           }
         }
 
-        if (command[i] !== '"') throw new Error("Cannot parse shell quotes reliably. Run git commit directly.")
+        if (command[i] !== '"') throw new Error(
+          `Unterminated double quote starting at character ${quoteStart + 1}. Close the quote before running the command.`,
+        )
+
         i++
         continue
       }

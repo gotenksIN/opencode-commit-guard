@@ -143,6 +143,13 @@ describe("extractGitCommits", () => {
     expect(() => extractGitCommits("echo `git commit")).toThrow("Run git commit directly")
   })
 
+  test("rejects unterminated quotes with the quote kind and opening position", () => {
+    expect(() => tokenizeShell("echo 'x")).toThrow("Unterminated single quote starting at character 6. Close the quote before running the command.")
+    expect(() => tokenizeShell('echo "x')).toThrow("Unterminated double quote starting at character 6. Close the quote before running the command.")
+    expect(() => tokenizeShell("echo $'x")).toThrow("Unterminated ANSI-C quote starting at character 6. Close the quote before running the command.")
+    expect(() => extractGitCommits("timeout 60 ssh host 'unterminated")).toThrow("Unterminated single quote")
+  })
+
   test("does not execute tab-stripped heredoc bodies as commands", () => {
     expect(extractGitCommits('cat <<-EOF\n\tgit commit -m "bad"\n\tEOF\n')).toEqual([])
     expect(extractGitCommits("cat <<-'EOF'\n\tgit commit -m bad\n\tEOF\ngit commit -m 'core: actual' -s")[0]?.messages).toEqual(["core: actual"])
