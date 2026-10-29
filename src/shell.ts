@@ -1004,6 +1004,11 @@ export function extractGitCommits(command: string, inheritedDirectoryChange = fa
         const body = wordTokens[bodyIndex]
 
         if (body === undefined || body.expansion) throw new Error("Cannot parse shell -c body reliably. Run git commit directly.")
+
+        if (/^(?:.*\/)?sh$/.test(words[commandStart] ?? "") && body.value.includes("$'")) {
+          throw new Error("Cannot parse $' quoting portably in sh -c. Use a literal bash -c or zsh -c body, or run git commit directly.")
+        }
+
         const wrapperChange = words.slice(0, commandStart).some((word) => word === "env" || isAssignment(word))
 
         invocations.push(...extractGitCommits(body.value, changedDirectory || wrapperChange, depth + 1))

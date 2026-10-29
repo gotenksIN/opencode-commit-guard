@@ -105,6 +105,7 @@ The extraction pipeline identifies git commit commands:
    - Positional separator `--` terminates flag processing.
 9. Recursively inspects `$()` and backtick substitutions and literal `bash`, `sh`, and `zsh` `-c` bodies.
    Backticks inside double quotes also remove backslashes that escape double quotes before recursive inspection.
+   Literal `sh -c` bodies containing `$'` fail closed because POSIX shells differ in their support for ANSI-C quotes.
    Substitution boundaries respect ANSI-C quotes and simple double-quoted parameters; `case` patterns and nested quoted parameters fail closed.
    Literal `case` arguments remain ordinary words; only command-position `case` syntax is rejected.
    Command positions include the literal `time [-p] [--]` prefix.

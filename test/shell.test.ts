@@ -111,6 +111,16 @@ describe("tokenizeShell", () => {
 })
 
 describe("extractGitCommits", () => {
+  test("rejects nonportable ANSI-C quoting in sh command bodies", () => {
+    expect(() => extractGitCommits(String.raw`sh -c "echo \$'\\\\'; git commit -m bad"`)).toThrow("quoting portably in sh -c")
+    expect(() => extractGitCommits(String.raw`/bin/sh -c "echo \$'\\\\'; git commit -m bad"`)).toThrow("quoting portably in sh -c")
+    expect(extractGitCommits(`sh -c 'echo ordinary; git commit -m "core: ordinary"'`)[0]?.messages).toEqual(["core: ordinary"])
+
+    for (const shell of ["bash", "zsh"]) {
+      expect(extractGitCommits(`${shell} -c "git commit -m \\$'core: a\\\\nb'"`)[0]?.messages).toEqual(["core: a\nb"])
+    }
+  })
+
   test("unescapes double quotes in double-quoted backtick substitutions", () => {
     expect(extractGitCommits("echo \"`VAR=\\\"'\\\" git commit -m 'bad'`\"")[0]?.messages).toEqual(["bad"])
     expect(extractGitCommits("echo `git commit -m 'core: ordinary'`")[0]?.messages).toEqual(["core: ordinary"])

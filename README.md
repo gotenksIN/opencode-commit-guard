@@ -161,6 +161,7 @@ The parser inspects commits inside command substitutions, backticks, and literal
 Use simple double-quoted parameters such as `"${HOME}"`; nested quoting, escapes, and expansions inside these parameters are rejected.
 Run `case` commands outside command substitutions; the parser rejects their ambiguous parentheses.
 Run function and `coproc` declarations outside command substitutions; their compound bodies are rejected there.
+Use `bash -c` or `zsh -c` instead of `sh -c` for bodies containing `$'` quoting; the guard rejects this nonportable syntax under `sh`.
 Run Git directly if a shell body is dynamic or cannot be parsed reliably.
 Put trailers in the literal message body or use `-s`; `--trailer` is rejected.
 The guard resolves the signing baseline before reporting message-format violations.
