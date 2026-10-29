@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { Tool } from "@opencode/schema/tool"
 import { Effect, Exit, Scope } from "effect"
 import { createHash } from "node:crypto"
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import plugin from "../index.js"
@@ -274,6 +274,31 @@ describe("opencode-commit-guard plugin", () => {
     expect(message).toContain("without changing the intended signing policy")
     expect(message).not.toContain("timeout 15s")
     await expect(harness.executeBefore("shell", { command: "git commit -s -m 'core: Subject'" })).rejects.toThrow("Repeating the capture will not fix it")
+  })
+
+  test("shares the baseline and refresh across root and subdirectory", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "commit-guard-root-"))
+    const subdirectory = join(directory, "sub")
+
+    teardown.push(async () => { rmSync(directory, { recursive: true, force: true }) })
+    mkdirSync(subdirectory)
+    expect(Bun.spawnSync(["git", "init", "-q", directory]).exitCode).toBe(0)
+    const harness = await setupTestPlugin({}, "missing", directory)
+    const command = await harness.prepareCapture(undefined, { workdir: "sub" }, subdirectory)
+
+    expect(Bun.spawnSync(["bash", "-c", command], { cwd: subdirectory }).exitCode).toBe(0)
+    await harness.completeCapture(command, { status: "completed", exit: 0, truncated: false })
+    await expect(harness.executeBefore("shell", { command: "git commit -s -m 'core: Root'", workdir: directory })).resolves.toBeUndefined()
+    expect(await harness.context({ workdir: "sub" })).toContain("Frozen commit baseline")
+    await harness.context({ refresh: true, workdir: directory })
+    await expect(harness.executeBefore("shell", { command: "git commit -s -m 'core: Sub'", workdir: subdirectory })).rejects.toThrow("Call commit_context")
+    const rootCommand = await harness.prepareCapture()
+
+    expect(Bun.spawnSync(["bash", "-c", rootCommand], { cwd: directory }).exitCode).toBe(0)
+    await harness.completeCapture(rootCommand, { status: "completed", exit: 0, truncated: false })
+    await expect(harness.executeBefore("shell", { command: "git commit -s -m 'core: Sub'", workdir: subdirectory })).resolves.toBeUndefined()
+    await harness.context({ refresh: true, workdir: "sub" })
+    await expect(harness.executeBefore("shell", { command: "git commit -s -m 'core: Root'", workdir: directory })).rejects.toThrow("Call commit_context")
   })
 
   test("allows non-shell tools without interception", async () => {

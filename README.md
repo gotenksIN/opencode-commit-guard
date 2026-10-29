@@ -75,6 +75,8 @@ Expired unclaimed captures release their private files on later context or tool 
 The plugin does not put complete historical messages into tool results or model context.
 Set `refresh: true` after a branch switch, a signing setting change, or a change to commit instructions.
 A failed refresh does not restore the previous baseline.
+Calls from the checkout root and its subdirectories share one baseline and refresh state.
+Run each capture from its exact indicated workdir.
 An external Git configuration change or checkout replacement at the same path is not detected until you refresh.
 Remote workspaces are unsupported.
 Historical scopes are observations, not allowed scopes or policy.

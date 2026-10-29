@@ -144,7 +144,7 @@ export const plugin = Plugin.define({
           if (request.refresh !== true) {
             const baseline = yield* load(ctx, scope)
 
-            if (baseline !== undefined && (baseline.workdir === targetWorkdir || baseline.directory === targetWorkdir)) {
+            if (baseline !== undefined && baseline.directory === findGitRoot(targetWorkdir)) {
               if (baseline.gpgsign === "error" || baseline.signingkey === "error") return { content: signingError(baseline.gpgsign === "error" ? "commit.gpgsign" : "user.signingkey") }
               const observed = [...new Set(baseline.messages.map((message) => message.split("\n")[0]?.match(/^([a-zA-Z0-9_./-]{1,40}): /)?.[1]).filter((value) => value !== undefined))].slice(0, 3)
               const examples = observed.length > 0 ? `Observed scope examples (not an allowlist): ${observed.join(", ")}.\n` : ""
@@ -267,19 +267,14 @@ export const plugin = Plugin.define({
       ))
 
       const targetGitRoot = findGitRoot(effectiveWorkdir)
-      let scope = scopeFor(ctx, event.sessionID, config, effectiveWorkdir)
-      let baseline = yield* load(ctx, scope)
-
-      if (baseline === undefined && targetGitRoot !== undefined && targetGitRoot !== effectiveWorkdir) {
-        scope = scopeFor(ctx, event.sessionID, config, targetGitRoot)
-        baseline = yield* load(ctx, scope)
-      }
+      const scope = scopeFor(ctx, event.sessionID, config, effectiveWorkdir)
+      const baseline = yield* load(ctx, scope)
 
       const expectedDir = targetGitRoot ?? effectiveWorkdir
 
       const baselineValid = baseline !== undefined &&
         targetGitRoot !== undefined && baseline.directory === targetGitRoot &&
-        (baseline.workdir === effectiveWorkdir || baseline.directory === expectedDir)
+        baseline.directory === expectedDir
 
       if (!baselineValid || baseline === undefined) {
         const relWorkdir = relative(sessionDirectory, expectedDir)

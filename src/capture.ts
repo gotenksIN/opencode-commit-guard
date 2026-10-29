@@ -53,7 +53,10 @@ function digest(text: string): string {
 export function scopeFor(ctx: Context, sessionID: string, config: CommitGuardConfig, targetDir?: string): string {
   const location = ctx.location
 
-  return digest(JSON.stringify([version, location.project.id, sessionID, targetDir ?? location.directory, location.workspaceID ?? null,
+  const directory = targetDir ?? location.directory
+  const root = findGitRoot(directory) ?? realpathSync(directory)
+
+  return digest(JSON.stringify([version, location.project.id, sessionID, root, location.workspaceID ?? null,
     policy, config.requireScope, config.allowedScopes ?? null, config.maxLineLength]))
 }
 

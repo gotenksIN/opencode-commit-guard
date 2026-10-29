@@ -169,7 +169,8 @@ The sweep never removes claimed attempts.
 Git reference failures cannot be inferred to mean detached or unborn HEAD; an unborn HEAD requires a readable symbolic reference and a successful status check.
 Only then does it store a checksum-protected snapshot under a unique key.
 The snapshot contains the checkout identity, branch, HEAD, up to ten full messages, and effective signing settings.
-Storage scopes include schema, project, session, location, and policy revision.
+Storage scopes include schema, project, session, canonical checkout root, workspace, and policy revision.
+Captures retain their exact authorized workdir for claim matching, while root and subdirectory calls share baseline identity and refresh invalidation.
 A persisted invalidation counter prevents a late snapshot from replacing a refreshed or cancelled baseline.
 Each prepared attempt reserves a distinct counter under the storage lock, including captures prepared after plugin reload.
 Cleanup compares and increments this counter atomically, only while the attempt still owns it.
