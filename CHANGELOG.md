@@ -2,6 +2,22 @@
 
 All notable changes to `opencode-commit-guard` are documented in this file.
 
+## 1.0.6 (2026-10-29)
+
+- Report the capture outcome in the shell result, so agents can commit after "Frozen commit baseline" without a second `commit_context` call.
+- Report why a capture failed, expired, or is still pending instead of silently returning another capture command.
+- Keep claimed captures alive through shell permission approval, and clean up unused captures.
+- Prevent a stale capture from invalidating a newer baseline.
+- Explain invalid `commit.gpgsign` or `user.signingkey` settings instead of repeating the capture.
+- Scope baselines to the checkout root, so subdirectories and the root share one baseline.
+- Check the baseline before message format, and allow `git commit --help` without a baseline.
+- Show one policy-aware rejection example with an allowed scope, signoff only when required, and a one-line `$'...'` wrapped body.
+- Detect commits after redirections, inside command substitutions, and in `bash -c` style wrappers; parse tab-stripped heredocs and Bash ANSI-C escapes.
+- Reject messages that contain shell expansion, and reject `--trailer`.
+- Reject `allowedScopes` entries that can never match.
+- Describe the full capture procedure in the `commit_context` tool description.
+- Update `@opencode/plugin` and `@opencode/schema` to `2.2.1`, `effect` to `4.0.1`, Oxlint dependencies to `1.90.0`, and `@types/bun` to `1.4.4`.
+
 ## 1.0.5 (2026-10-02)
 
 - Add support for Git repositories located in subdirectories and moved worktrees without requiring session moves.
