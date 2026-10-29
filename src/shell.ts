@@ -211,13 +211,13 @@ function consumeCommandSubstitution(command: string, start: number, nesting = 0)
   throw new Error("Cannot parse shell substitution reliably. Run git commit directly.")
 }
 
-function consumeBackticks(command: string, start: number): CommandSubstitution {
+function consumeBackticks(command: string, start: number, doubleQuoted = false): CommandSubstitution {
   let content = ""
 
   for (let i = start + 1; i < command.length; i++) {
     if (command[i] === "`") return { content, end: i + 1 }
 
-    if (command[i] === "\\" && ["$", "`", "\\"].includes(command[i + 1] ?? "")) i++
+    if (command[i] === "\\" && (["$", "`", "\\"].includes(command[i + 1] ?? "") || doubleQuoted && command[i + 1] === '"')) i++
     content += command[i]
   }
 
@@ -569,7 +569,7 @@ export function tokenizeShell(command: string): ShellToken[] {
             expansion = true
             i = end
           } else if (quotedCharacter === "`") {
-            const substitution = consumeBackticks(command, i)
+            const substitution = consumeBackticks(command, i, true)
 
             value += command.slice(i, substitution.end)
             substitutions.push(substitution.content)

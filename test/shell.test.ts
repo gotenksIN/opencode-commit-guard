@@ -111,6 +111,12 @@ describe("tokenizeShell", () => {
 })
 
 describe("extractGitCommits", () => {
+  test("unescapes double quotes in double-quoted backtick substitutions", () => {
+    expect(extractGitCommits("echo \"`VAR=\\\"'\\\" git commit -m 'bad'`\"")[0]?.messages).toEqual(["bad"])
+    expect(extractGitCommits("echo `git commit -m 'core: ordinary'`")[0]?.messages).toEqual(["core: ordinary"])
+    expect(extractGitCommits('echo "`git commit -m \\"core: ordinary\\"`"')[0]?.messages).toEqual(["core: ordinary"])
+  })
+
   test("handles ANSI-C quotes and rejects ambiguous substitution syntax", () => {
     expect(extractGitCommits(String.raw`echo $(git commit -m "bad"; echo $'a\')')`)[0]?.messages).toEqual(["bad"])
     expect(() => extractGitCommits(`echo $(git commit -m "bad"; echo "\${x:-")'"}")`)).toThrow("double-quoted parameter expansion")
