@@ -72,6 +72,7 @@ The tokenizer divides the raw command into words, control operators, and redirec
   - Single quotes (`'...'`) preserve all characters literally.
   - Double quotes (`"..."`) decode `\"`, `\\`, `\$`, and `` \` ``, and remove backslash-newline continuations.
     They preserve `\n` literally.
+    Simple `${...}` parameters remain intact; nested quoting, escapes, and expansions inside them fail closed.
   - ANSI-C quotes (`$'...'`) decode Bash control, hexadecimal, Unicode, and octal escapes, and preserve the backslash on unknown escapes.
     A trailing `\c` preserves the closing quote; `\c\\` consumes the escaped backslash operand.
 - Concatenation: Adjacent quoted and unquoted fragments (such as `--message="value"`) combine into a single word token.

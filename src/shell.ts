@@ -165,6 +165,18 @@ function consumeBackticks(command: string, start: number): CommandSubstitution {
   throw new Error("Cannot parse backtick substitution reliably. Run git commit directly.")
 }
 
+function consumeQuotedParameter(command: string, start: number): number {
+  for (let i = start + 2; i < command.length; i++) {
+    const character = command[i]!
+
+    if (character === "}") return i + 1
+
+    if (["'", '"', "\\", "`", "$", "{"].includes(character)) break
+  }
+
+  throw new Error("Cannot parse nested quoting or expansions in a double-quoted parameter expansion. Use a simple parameter such as \"${HOME}\" or run git commit directly.")
+}
+
 function ansiEscape(command: string, start: number): ANSIEscape {
   const escaped = command[start + 1] ?? ""
   const simple = new Map(Object.entries({ a: "\x07", b: "\b", e: "\x1b", E: "\x1b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v", "\\": "\\", "'": "'", '"': '"', "?": "?" }))
@@ -491,6 +503,12 @@ export function tokenizeShell(command: string): ShellToken[] {
             substitutions.push(substitution.content)
             expansion = true
             i = substitution.end
+          } else if (quotedCharacter === "$" && command[i + 1] === "{") {
+            const end = consumeQuotedParameter(command, i)
+
+            value += command.slice(i, end)
+            expansion = true
+            i = end
           } else if (quotedCharacter === "`") {
             const substitution = consumeBackticks(command, i)
 

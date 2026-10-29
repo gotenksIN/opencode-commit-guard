@@ -111,6 +111,12 @@ describe("tokenizeShell", () => {
 })
 
 describe("extractGitCommits", () => {
+  test("rejects nested quoting in double-quoted parameter expansions", () => {
+    expect(() => extractGitCommits(`echo "\${x:-"'"}"; git commit -m "bad"`)).toThrow("double-quoted parameter expansion")
+    expect(extractGitCommits('echo "${HOME}"; git commit -m "core: literal"')[0]?.messages).toEqual(["core: literal"])
+    expect(tokenizeShell('echo "${x:-default}"')[1]?.value).toBe("${x:-default}")
+  })
+
   test("keeps ANSI-C control escapes within their quote boundaries", () => {
     expect(extractGitCommits(String.raw`echo $'\c'; git commit -m "bad"`)[0]?.messages).toEqual(["bad"])
     expect(extractGitCommits(String.raw`echo $'\c\\'; git commit -m "bad"`)[0]?.messages).toEqual(["bad"])
