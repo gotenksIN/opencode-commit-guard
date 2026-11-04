@@ -26,9 +26,9 @@
     "effect": "4.0.1"
   },
   "devDependencies": {
-    "@oxlint/plugins": "1.90.0",
     "@types/bun": "1.4.4",
     "oxlint": "1.90.0",
+    "oxlint-plugin-anti-slop": "github:dmmulroy/anti-slop#c44ef22ca116d0ba62a3ff663a0bd13a3f3fa40b",
     "typescript": "7.0.2"
   },
   "engines": {

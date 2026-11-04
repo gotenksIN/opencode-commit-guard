@@ -1,7 +1,7 @@
 const config = {
-  ignorePatterns: ["dist/**", "tools/oxlint/anti-slop/**"],
+  ignorePatterns: ["dist/**"],
   jsPlugins: [
-    { name: "anti-slop", specifier: "./tools/oxlint/anti-slop/index.ts" },
+    { name: "anti-slop", specifier: "oxlint-plugin-anti-slop" },
   ],
   rules: {
     "oxc/no-accumulating-spread": "error",
