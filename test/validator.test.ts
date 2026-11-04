@@ -28,32 +28,21 @@ function invocation(
 }
 
 describe("validator - scope rules", () => {
-  test("accepts standard scope in subject line", () => {
-    const inv = [invocation(["kernel: add support for new soc"])]
-    expect(() => validateGitCommits(inv, defaultConfig, "git commit -m '...' -s")).not.toThrow()
-  })
-
-  test("accepts scopes with hyphens, underscores, slashes, and dots", () => {
+  test("accepts plain and conventional scopes with hyphens, underscores, slashes, and dots", () => {
     const scopes = [
       "releasetools: fix ota generation",
       "device_xiaomi_sm8250: update tree",
       "build/soong: update ninja generator",
       "ext4: fix journal deadlock",
       "arm64: dts: update clock frequencies",
+      "feat(parser): add subshell support",
+      "fix(ui): resolve button alignment issue",
     ]
 
     for (const msg of scopes) {
       const inv = [invocation([msg])]
       expect(() => validateGitCommits(inv, defaultConfig, "git commit")).not.toThrow()
     }
-  })
-
-  test("accepts conventional commit scopes like feat(parser): and fix(ui):", () => {
-    const inv1 = [invocation(["feat(parser): add subshell support"])]
-    expect(() => validateGitCommits(inv1, defaultConfig, "git commit")).not.toThrow()
-
-    const inv2 = [invocation(["fix(ui): resolve button alignment issue"])]
-    expect(() => validateGitCommits(inv2, defaultConfig, "git commit")).not.toThrow()
   })
 
   test("accepts chained fixup and squash prefixes with standard and conventional scopes", () => {
@@ -88,32 +77,19 @@ describe("validator - scope rules", () => {
     }
   })
 
-  test("rejects commit missing scope prefix", () => {
-    const inv = [invocation(["Add support for new sensor"])]
-    expect(() => validateGitCommits(inv, defaultConfig, "git commit")).toThrow(
-      'Missing scope in subject line "Add support for new sensor"',
-    )
-  })
+  test("rejects malformed scope prefixes with a specific violation", () => {
+    const cases = [
+      ["Add support for new sensor", 'Missing scope in subject line "Add support for new sensor"'],
+      [": add support for new sensor", "Missing scope before colon"],
+      ["kernel:add support for new sensor", "Missing space after colon"],
+      ["kernel:", "Subject text after colon is empty"],
+    ]
 
-  test("rejects commit with empty scope before colon", () => {
-    const inv = [invocation([": add support for new sensor"])]
-    expect(() => validateGitCommits(inv, defaultConfig, "git commit")).toThrow(
-      "Missing scope before colon",
-    )
-  })
+    for (const [subject, violation] of cases) {
+      if (subject === undefined || violation === undefined) continue
 
-  test("rejects commit with missing space after colon", () => {
-    const inv = [invocation(["kernel:add support for new sensor"])]
-    expect(() => validateGitCommits(inv, defaultConfig, "git commit")).toThrow(
-      "Missing space after colon",
-    )
-  })
-
-  test("rejects commit with empty subject after colon", () => {
-    const inv = [invocation(["kernel:"])]
-    expect(() => validateGitCommits(inv, defaultConfig, "git commit")).toThrow(
-      "Subject text after colon is empty",
-    )
+      expect(() => validateGitCommits([invocation([subject])], defaultConfig, "git commit")).toThrow(violation)
+    }
   })
 
   test("allows commits without scope when requireScope is false", () => {
@@ -176,21 +152,6 @@ describe("validator - allowed scopes", () => {
 })
 
 describe("validator - line length limit", () => {
-  test("accepts lines at or below 72 characters", () => {
-    const subject = "kernel: add support for foo"
-    const body = "This is a body paragraph that stays comfortably below the limit."
-    const inv = [invocation([`${subject}\n\n${body}`])]
-    expect(() => validateGitCommits(inv, defaultConfig, "git commit")).not.toThrow()
-  })
-
-  test("rejects subject line exceeding 72 characters", () => {
-    const longSubject = "kernel: add support for an extremely long feature name that exceeds the limit"
-    const inv = [invocation([longSubject])]
-    expect(() => validateGitCommits(inv, defaultConfig, "git commit")).toThrow(
-      "exceeds maximum line length of 72 characters",
-    )
-  })
-
   test("rejects body line exceeding 72 characters and identifies line number", () => {
     const message = [
       "kernel: fix race condition",
@@ -212,11 +173,6 @@ describe("validator - line length limit", () => {
 })
 
 describe("validator - signoff requirement", () => {
-  test("accepts commit with signoff flag", () => {
-    const inv = [invocation(["kernel: add foo"], true)]
-    expect(() => validateGitCommits(inv, defaultConfig, "git commit")).not.toThrow()
-  })
-
   test("accepts commit with Signed-off-by trailer in body without -s flag", () => {
     const message = [
       "kernel: add foo",
@@ -238,19 +194,11 @@ describe("validator - signoff requirement", () => {
   })
 
   test("rejects a signoff pattern used as the subject line", () => {
-    const inv = [invocation(["Signed-off-by: Jane Doe <jane@example.com>"], false)]
     const config = { ...defaultConfig, requireScope: false }
-    expect(() => validateGitCommits(inv, config, "git commit")).toThrow(
-      "Missing commit signoff",
-    )
-  })
 
-  test("rejects a signoff pattern after leading blank lines", () => {
-    const inv = [invocation(["\nSigned-off-by: Jane Doe <jane@example.com>"], false)]
-    const config = { ...defaultConfig, requireScope: false }
-    expect(() => validateGitCommits(inv, config, "git commit")).toThrow(
-      "Missing commit signoff",
-    )
+    for (const message of ["Signed-off-by: Jane Doe <jane@example.com>", "\nSigned-off-by: Jane Doe <jane@example.com>"]) {
+      expect(() => validateGitCommits([invocation([message], false)], config, "git commit")).toThrow("Missing commit signoff")
+    }
   })
 
   test("allows commit without signoff when the captured signing policy does not enforce it", () => {

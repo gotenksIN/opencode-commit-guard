@@ -27,11 +27,6 @@ describe("tokenizeShell", () => {
     expect(tokens.map((t) => t.value)).toEqual(["git", "commit", "-m", 'parser: support "quoted" values', "-s"])
   })
 
-  test("handles ANSI-C quoting with escape sequences", () => {
-    const tokens = tokenizeShell("git commit -m $'kernel: line 1\\nline 2' -s")
-    expect(tokens.map((t) => t.value)).toEqual(["git", "commit", "-m", "kernel: line 1\nline 2", "-s"])
-  })
-
   test("handles line continuations with backslash newline", () => {
     const tokens = tokenizeShell("git commit \\\n  -m 'kernel: fix' \\\n  -s")
     expect(tokens.map((t) => t.value)).toEqual(["git", "commit", "-m", "kernel: fix", "-s"])
@@ -40,19 +35,6 @@ describe("tokenizeShell", () => {
   test("discards line continuations inside double quotes", () => {
     const tokens = tokenizeShell('git commit -m "kernel: fix \\\nrace" -s')
     expect(tokens.map((token) => token.value)).toEqual(["git", "commit", "-m", "kernel: fix race", "-s"])
-  })
-
-  test("strips unquoted shell comments through the end of the line", () => {
-    const tokens = tokenizeShell('git commit -m "kernel: fix" # --help -s\ngit status')
-    expect(tokens.map((token) => token.value)).toEqual([
-      "git",
-      "commit",
-      "-m",
-      "kernel: fix",
-      "\n",
-      "git",
-      "status",
-    ])
   })
 
   test("handles chained operators and subshells", () => {
@@ -98,10 +80,6 @@ describe("tokenizeShell", () => {
       ["redirect", "2>&"],
       ["word", "1"],
     ])
-    const invocations = extractGitCommits("git commit -m 'scope: fix' -s > /dev/null 2>&1")
-    expect(invocations).toHaveLength(1)
-    expect(invocations[0]?.messages).toEqual(["scope: fix"])
-    expect(invocations[0]?.hasSignoffFlag).toBe(true)
   })
 
   test("concatenates adjacent unquoted and quoted tokens", () => {

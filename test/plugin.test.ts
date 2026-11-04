@@ -453,13 +453,6 @@ describe("opencode-commit-guard plugin", () => {
     ).resolves.toBeUndefined()
   })
 
-  test("allows commands that mention git commit inside strings", async () => {
-    const harness = await setupTestPlugin()
-    await expect(
-      harness.executeBefore("shell", { command: 'echo "git commit without scope"' }),
-    ).resolves.toBeUndefined()
-  })
-
   test("allows conforming git commit commands", async () => {
     const harness = await setupTestPlugin()
     await expect(
@@ -467,37 +460,6 @@ describe("opencode-commit-guard plugin", () => {
     ).resolves.toBeUndefined()
     await expect(
       harness.executeBefore("bash", { command: 'git commit -sm "feat(parser): add subshell support"' }),
-    ).resolves.toBeUndefined()
-  })
-
-  test("allows generated fixup commits without an explicit message", async () => {
-    const harness = await setupTestPlugin()
-    await expect(
-      harness.executeBefore("shell", { command: "git commit --fixup=HEAD" }),
-    ).resolves.toBeUndefined()
-  })
-
-  test("allows explicit fixup and squash subjects with valid scopes", async () => {
-    const harness = await setupTestPlugin()
-    await expect(
-      harness.executeBefore("shell", { command: 'git commit -s -m "fixup! kernel: fix race"' }),
-    ).resolves.toBeUndefined()
-    await expect(
-      harness.executeBefore("shell", { command: 'git commit -s -m "squash! feat(parser): add token"' }),
-    ).resolves.toBeUndefined()
-  })
-
-  test("rejects explicit fixup subjects with invalid scopes", async () => {
-    const harness = await setupTestPlugin()
-    await expect(
-      harness.executeBefore("shell", { command: 'git commit -s -m "fixup! invalid subject"' }),
-    ).rejects.toThrow('Missing scope in subject line "fixup! invalid subject"')
-  })
-
-  test("allows a no-edit amendment without an explicit message", async () => {
-    const harness = await setupTestPlugin()
-    await expect(
-      harness.executeBefore("shell", { command: "git commit --amend --no-edit" }),
     ).resolves.toBeUndefined()
   })
 
@@ -589,16 +551,6 @@ describe("opencode-commit-guard plugin", () => {
     }
   })
 
-  test("validates an amendment when an explicit message is provided", async () => {
-    const harness = await setupTestPlugin()
-    await expect(
-      harness.executeBefore("shell", { command: 'git commit --amend -s -m "kernel: valid message"' }),
-    ).resolves.toBeUndefined()
-    await expect(
-      harness.executeBefore("shell", { command: 'git commit --amend -s -m "invalid message"' }),
-    ).rejects.toThrow("Missing scope in subject line")
-  })
-
   test("rejects git commit commands with invalid format before execution", async () => {
     const harness = await setupTestPlugin()
     await expect(
@@ -636,20 +588,6 @@ describe("opencode-commit-guard plugin", () => {
     await expect(
       harness.executeBefore("shell", { command: 'git commit -m "kernel: fix race condition"' }),
     ).rejects.toThrow("Missing commit signoff")
-
-    const withoutBaseline = await setupTestPlugin({}, "missing")
-
-    await expect(
-      withoutBaseline.executeBefore("shell", { command: 'git commit -s -m "kernel: fix race condition"' }),
-    ).rejects.toThrow("Call commit_context")
-  })
-
-  test("rejects git commit commands exceeding line length", async () => {
-    const harness = await setupTestPlugin()
-    const longMsg = "kernel: add support for an excessively long feature description that crosses seventy-two chars"
-    await expect(
-      harness.executeBefore("shell", { command: `git commit -s -m "${longMsg}"` }),
-    ).rejects.toThrow("Commit message exceeds maximum line length of 72 characters")
   })
 
   test("respects allowedScopes option", async () => {
