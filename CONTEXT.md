@@ -88,6 +88,7 @@ The tokenizer divides the raw command into words, control operators, and redirec
   Substitution inspection consumes escaped backslash pairs before checking whether a dollar sign is escaped.
 - Message tokens track unquoted and double-quoted expansions without evaluating them.
 - Unterminated quotes fail closed with the quote kind and the position of the opening quote.
+- Unterminated backtick and `$(` substitutions fail closed with their opening position and instructions to close the substitution or quote literal text.
 
 ### 2. Invocation extraction (`extractGitCommits`)
 

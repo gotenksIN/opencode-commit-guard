@@ -262,7 +262,7 @@ function consumeCommandSubstitution(command: string, start: number, nesting = 0)
   }
 
   if (pendingHeredocs.length > 0) throw incompleteHeredoc()
-  throw new Error("Cannot parse shell substitution reliably. Run git commit directly.")
+  throw new Error(`Unterminated $( substitution starting at character ${start + 1}. Close it with ) or use single quotes for literal text.`)
 }
 
 function consumeBackticks(command: string, start: number, doubleQuoted = false): CommandSubstitution {
@@ -275,7 +275,7 @@ function consumeBackticks(command: string, start: number, doubleQuoted = false):
     content += command[i]
   }
 
-  throw new Error("Cannot parse backtick substitution reliably. Run git commit directly.")
+  throw new Error(`Unterminated backtick substitution starting at character ${start + 1}. Close it, escape a literal backtick as \\\`, or use single quotes.`)
 }
 
 function consumeQuotedParameter(command: string, start: number): number {

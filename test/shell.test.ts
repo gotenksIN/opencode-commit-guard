@@ -318,7 +318,17 @@ describe("extractGitCommits", () => {
     }
 
     expect(() => extractGitCommits('bash -c "$SCRIPT"')).toThrow("Run git commit directly")
-    expect(() => extractGitCommits("echo `git commit")).toThrow("Run git commit directly")
+  })
+
+  test("explains unterminated substitutions with their opening positions", () => {
+    expect(() => extractGitCommits('rg -n "x|`\\./admin.sh|y" file')).toThrow("Unterminated backtick substitution starting at character 10. Close it, escape a literal backtick as \\`, or use single quotes.")
+    expect(() => extractGitCommits("echo `git commit")).toThrow("Unterminated backtick substitution starting at character 6.")
+    expect(() => extractGitCommits("echo $(printf x")).toThrow("Unterminated $( substitution starting at character 6. Close it with ) or use single quotes for literal text.")
+    expect(() => extractGitCommits('echo "$(printf x')).toThrow("Unterminated $( substitution starting at character 7.")
+
+    expect(extractGitCommits('rg -n "x|\\`\\./admin.sh|y" file')).toEqual([])
+    expect(extractGitCommits("rg -n 'x|`\\./admin.sh|y' file")).toEqual([])
+    expect(() => extractGitCommits('echo $(echo "`unterminated)')).toThrow("Unterminated backtick substitution starting at character 14")
   })
 
   test("rejects unterminated quotes with the quote kind and opening position", () => {
