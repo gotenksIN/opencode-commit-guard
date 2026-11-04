@@ -83,6 +83,7 @@ The tokenizer divides the raw command into words, control operators, and redirec
 - Line continuation: Backslash newline sequences (`\` + `\n`) are discarded.
 - Redirections: File descriptors and redirect operators (`> /dev/null`, `2>&1`, `< file`) are identified and separated from arguments.
 - Tab-stripping heredocs (`<<-`) remove leading tabs from body lines and the closing delimiter.
+- ANSI-C and locale-quoted heredoc delimiters fail closed; use plain quoted delimiters.
 - Unquoted heredocs join backslash-newline continuations before delimiter matching and substitution inspection; quoted heredocs preserve them.
   Substitution inspection consumes escaped backslash pairs before checking whether a dollar sign is escaped.
 - Message tokens track unquoted and double-quoted expansions without evaluating them.
@@ -109,6 +110,10 @@ The extraction pipeline identifies git commit commands:
    Backticks inside double quotes also remove backslashes that escape double quotes before recursive inspection.
    Literal `sh -c` bodies containing `$'` fail closed because POSIX shells differ in their support for ANSI-C quotes.
    Substitution boundaries respect ANSI-C quotes and simple double-quoted parameters; `case` patterns and nested quoted parameters fail closed.
+   Substitution boundaries queue `<<` and `<<-` heredocs until the next unquoted newline and skip their bodies through each closing delimiter.
+   They use the same delimiter parsing, tab stripping, and unquoted line continuation rules as top-level heredocs.
+   Arithmetic expansions and command-position `((...))` expressions keep left shifts separate from heredoc operators.
+   Quoted bodies remain literal; unquoted bodies retain recursive `$()` inspection and reject backtick substitutions.
    Literal `case` arguments remain ordinary words; only command-position `case` syntax is rejected.
    Command positions include the literal `time [-p] [--]` prefix.
    Function and `coproc` declarations inside substitutions fail closed because their bodies require compound-command parsing.

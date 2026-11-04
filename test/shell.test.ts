@@ -111,6 +111,104 @@ describe("tokenizeShell", () => {
 })
 
 describe("extractGitCommits", () => {
+  test("skips literal heredoc bodies inside command substitutions", () => {
+    for (const delimiter of ["'EOF'", '"EOF"', "E'OF'", "\\EOF", "EOF"]) {
+      for (const body of ["the repository's style", "a ) b", "git commit -m bad"]) {
+        const command = `text=$(cat <<${delimiter}\n${body}\nEOF\n)`
+
+        expect(extractGitCommits(command)).toEqual([])
+      }
+    }
+
+    expect(extractGitCommits("text=$(cat <<'EOF'\nthe repository's `style` $(git commit -m bad)\nEOF\n)\npayload=$(python3 -c 'pass' \"$text\")\nopencode api post /api/example --data \"$payload\"")).toEqual([])
+    expect(extractGitCommits("text=$(cat <<''\na ) b\n\n)")).toEqual([])
+    expect(extractGitCommits('text=$(cat <<<"a ) b")')).toEqual([])
+  })
+
+  test("queues multiple substitution heredocs and strips tabs only for <<-", () => {
+    for (const delimiter of ["EOF", "'EOF'"]) {
+      expect(extractGitCommits(`text=$(cat <<-${delimiter}\n\tthe repository's ) style\n\tEOF\n)`)).toEqual([])
+    }
+
+    expect(extractGitCommits("text=$(cat <<'ONE' <<-TWO; echo ready\nthe repository's ) style\nONE\n\tmore ) text\n\tTWO\n)")).toEqual([])
+    expect(extractGitCommits("text=$(cat <<EOF \\\n; echo ready\na ) b\nEOF\n)")).toEqual([])
+    expect(extractGitCommits("text=$(cat <<EOF # <<'ignored'\na ) b\nEOF\n)")).toEqual([])
+    expect(() => extractGitCommits("text=$(cat <<'EOF'\na ) b\n\tEOF\n)")).toThrow("incomplete heredoc")
+  })
+
+  test("finds and validates commits inside substitutions containing heredocs", () => {
+    for (const command of [
+      "text=$(cat <<'EOF'\nthe repository's ) style\nEOF\ngit commit -m bad\n)",
+      "text=$(cat <<EOF\na ) b $(git commit -m bad)\nEOF\n)",
+      "text=$(cat <<EOF\n$(cat <<'INNER'\na ) b\nINNER\ngit commit -m bad\n)\nEOF\n)",
+      "text=$(cat <<EOF\nE\\\nOF\ngit commit -m bad\n)",
+    ]) {
+      const invocations = extractGitCommits(command)
+
+      expect(invocations).toHaveLength(1)
+      expect(invocations[0]?.messages).toEqual(["bad"])
+      expect(() => validateGitCommits(invocations, defaultConfig, command)).toThrow("Missing scope")
+    }
+
+    const command = "text=$(git commit -s -F - <<'EOF'\ncore: Preserve the repository's ) style\nEOF\n)"
+    const invocations = extractGitCommits(command)
+
+    expect(invocations).toHaveLength(1)
+    expect(invocations[0]?.stdinMessage).toBe("core: Preserve the repository's ) style\n")
+    expect(() => validateGitCommits(invocations, defaultConfig, command)).not.toThrow()
+  })
+
+  test("preserves fail-closed inspection of unquoted substitution heredocs", () => {
+    expect(() => extractGitCommits('text=$(cat <<EOF\na ) b `git commit -m bad`\nEOF\n)')).toThrow("command substitutions in an unquoted heredoc")
+    expect(extractGitCommits('text=$(cat <<EOF\na ) b \\$(git commit -m bad)\nEOF\n)')).toEqual([])
+    expect(extractGitCommits('text=$(cat <<EOF\na ) b \\\\$(git commit -m bad)\nEOF\n)')[0]?.messages).toEqual(["bad"])
+    expect(extractGitCommits('text=$(cat <<EOF\nhello \\\nEOF\na ) b\nEOF\ngit commit -m bad\n)')[0]?.messages).toEqual(["bad"])
+  })
+
+  test("rejects incomplete heredocs inside substitutions", () => {
+    for (const command of [
+      "text=$(cat <<'EOF'\na ) b\n)",
+      "text=$(cat <<EOF\nthe repository's style\n)",
+      "text=$(cat <<EOF)",
+      "text=$(cat <<EOF",
+      "text=$(cat <<'ONE' <<TWO\nbody\nONE\n)",
+      "text=$(cat <<\n)",
+    ]) {
+      expect(() => extractGitCommits(command)).toThrow("Cannot validate an incomplete heredoc. Close its delimiter on a separate line before running the command.")
+    }
+  })
+
+  test("rejects dollar-quoted heredoc delimiters before skipping executable commands", () => {
+    for (const quote of ['"', "'"]) {
+      for (const continuation of ["", "\\\n"]) {
+        const heredoc = `cat <<$${continuation}${quote}EOF${quote}\n"\nEOF\ngit commit -m bad\n$EOF\n`
+        const message = quote === '"' ? "locale-quoted heredoc delimiter" : "ANSI-C quoted heredoc delimiter"
+
+        expect(() => extractGitCommits(heredoc)).toThrow(message)
+        expect(() => extractGitCommits(`text=$(${heredoc})`)).toThrow(message)
+      }
+    }
+  })
+
+  test("does not interpret arithmetic left shifts as substitution heredocs", () => {
+    for (const command of ['echo $((1 << 2))', 'echo "$((1 << 2))"', 'echo $( ((1 << 2)); echo done )']) {
+      expect(extractGitCommits(command)).toEqual([])
+    }
+
+    for (const command of [
+      'echo $((1 << $(git commit -m bad)))',
+      'echo $( ((1 << 2)); git commit -m bad )',
+    ]) {
+      expect(extractGitCommits(command)[0]?.messages).toEqual(["bad"])
+    }
+  })
+
+  test("bounds substitution recursion through heredoc delimiters", () => {
+    for (const command of ["echo $(" + "cat <<$(".repeat(20000) + "true", "cat <<$(".repeat(20000) + "true"]) {
+      expect(() => extractGitCommits(command)).toThrow("Shell parsing limit exceeded. Run git commit directly.")
+    }
+  })
+
   test("joins unquoted heredoc continuations before delimiter matching", () => {
     const command = 'cat <<EOF\nhello \\\nEOF\n\'\nEOF\ngit commit -m "bad"'
 

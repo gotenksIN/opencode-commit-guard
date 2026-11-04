@@ -49,6 +49,18 @@ interface ANSIEscape extends CommandSubstitution {
   readonly byte?: number
 }
 
+interface HeredocDelimiter {
+  readonly delimiter: string
+  readonly quoted: boolean
+  readonly stripTabs: boolean
+}
+
+interface Tokenization {
+  readonly tokens: ShellToken[]
+  readonly end: number
+  readonly delimiter?: HeredocDelimiter
+}
+
 function isWordSeparator(character: string): boolean {
   return (
     character === " " ||
@@ -71,6 +83,8 @@ function consumeCommandSubstitution(command: string, start: number, nesting = 0)
   let atWordStart = true
   let atCommandStart = true
   let timeOption = false
+  let arithmeticDepth: number | undefined = command[start + 2] === "(" ? 1 : undefined
+  const pendingHeredocs: HeredocDelimiter[] = []
 
   while (i < command.length) {
     const character = command[i]
@@ -104,6 +118,8 @@ function consumeCommandSubstitution(command: string, start: number, nesting = 0)
         i = consumeCommandSubstitution(command, i, nesting + 1).end
       } else if (character === "$" && command[i + 1] === "{") {
         i = consumeQuotedParameter(command, i)
+      } else if (character === "`") {
+        i = consumeBackticks(command, i, true).end
       } else {
         i++
       }
@@ -118,6 +134,32 @@ function consumeCommandSubstitution(command: string, start: number, nesting = 0)
       }
 
       i += i + 1 < command.length ? 2 : 1
+      continue
+    }
+
+    if (arithmeticDepth === undefined && character === "<" && command[i + 1] === "<") {
+      if (command[i + 2] === "<") {
+        i += 3
+      } else {
+        const parsed = tokenizeShellInput(command, i, true, nesting + 1)
+
+        if (parsed.delimiter === undefined) throw incompleteHeredoc()
+        pendingHeredocs.push(parsed.delimiter)
+        i = parsed.end
+      }
+
+      atWordStart = true
+      continue
+    }
+
+    if (character === "\n" && pendingHeredocs.length > 0) {
+      i++
+
+      for (const heredoc of pendingHeredocs) i = consumeHeredoc(command, i, heredoc).end
+      pendingHeredocs.length = 0
+      atWordStart = true
+      atCommandStart = true
+      timeOption = false
       continue
     }
 
@@ -180,7 +222,14 @@ function consumeCommandSubstitution(command: string, start: number, nesting = 0)
       continue
     }
 
+    if (character === "`") {
+      i = consumeBackticks(command, i).end
+      atWordStart = false
+      continue
+    }
+
     if (character === "(") {
+      if (arithmeticDepth === undefined && atCommandStart && command[i + 1] === "(") arithmeticDepth = depth
       depth++
       i++
       atWordStart = true
@@ -191,7 +240,11 @@ function consumeCommandSubstitution(command: string, start: number, nesting = 0)
     if (character === ")") {
       depth--
 
+      if (depth === arithmeticDepth) arithmeticDepth = undefined
+
       if (depth === 0) {
+        if (pendingHeredocs.length > 0) throw incompleteHeredoc()
+
         return { content: command.slice(start + 2, i), end: i + 1 }
       }
 
@@ -208,6 +261,7 @@ function consumeCommandSubstitution(command: string, start: number, nesting = 0)
     i++
   }
 
+  if (pendingHeredocs.length > 0) throw incompleteHeredoc()
   throw new Error("Cannot parse shell substitution reliably. Run git commit directly.")
 }
 
@@ -300,11 +354,55 @@ function heredocSubstitutions(body: string): string[] {
   return substitutions
 }
 
+function incompleteHeredoc(): Error {
+  return new Error("Cannot validate an incomplete heredoc. Close its delimiter on a separate line before running the command.")
+}
+
+function consumeHeredoc(command: string, start: number, heredoc: HeredocDelimiter): CommandSubstitution {
+  let i = start
+  let body = ""
+
+  while (i < command.length) {
+    let line = ""
+    let newline = false
+
+    while (i < command.length) {
+      const lineEnd = command.indexOf("\n", i)
+      const end = lineEnd < 0 ? command.length : lineEnd
+      const physicalLine = command.slice(i, end)
+      const backslashes = physicalLine.match(/\\+$/)?.[0].length ?? 0
+
+      newline = lineEnd >= 0
+      i = newline ? end + 1 : end
+
+      if (!heredoc.quoted && newline && backslashes % 2 === 1) {
+        line += physicalLine.slice(0, -1)
+        continue
+      }
+
+      line += physicalLine
+      break
+    }
+
+    if (heredoc.stripTabs) line = line.replace(/^\t+/, "")
+
+    if (line === heredoc.delimiter) return { content: body, end: i }
+
+    body += line + (newline ? "\n" : "")
+  }
+
+  throw incompleteHeredoc()
+}
+
 export function tokenizeShell(command: string): ShellToken[] {
+  return tokenizeShellInput(command).tokens
+}
+
+function tokenizeShellInput(command: string, start = 0, delimiterOnly = false, nesting = 0): Tokenization {
   const tokens: ShellToken[] = []
-  const pendingHeredocs: { index: number; delimiter: string; quoted: boolean; stripTabs: boolean }[] = []
+  const pendingHeredocs: (HeredocDelimiter & { index: number })[] = []
   let pendingDelimiter: number | undefined
-  let i = 0
+  let i = start
 
   while (i < command.length) {
     const character = command[i]
@@ -328,6 +426,10 @@ export function tokenizeShell(command: string): ShellToken[] {
 
     const twoCharacters = command.slice(i, i + 2)
     let standaloneBrace = false
+
+    if (delimiterOnly && pendingDelimiter !== undefined && (isWordSeparator(character) || character === "<" || character === ">")) {
+      throw incompleteHeredoc()
+    }
 
     if (character === "{" || character === "}") {
       let commandPosition = true
@@ -391,51 +493,13 @@ export function tokenizeShell(command: string): ShellToken[] {
 
       if (character === "\n" && pendingHeredocs.length > 0) {
         for (const heredoc of pendingHeredocs) {
-          let body = ""
-          let complete = false
+          const body = consumeHeredoc(command, i, heredoc)
 
-          while (i < command.length) {
-            let line = ""
-            let newline = false
-
-            while (i < command.length) {
-              const lineEnd = command.indexOf("\n", i)
-              const end = lineEnd < 0 ? command.length : lineEnd
-              const physicalLine = command.slice(i, end)
-              const backslashes = physicalLine.match(/\\+$/)?.[0].length ?? 0
-
-              newline = lineEnd >= 0
-              i = newline ? end + 1 : end
-
-              if (!heredoc.quoted && newline && backslashes % 2 === 1) {
-                line += physicalLine.slice(0, -1)
-                continue
-              }
-
-              line += physicalLine
-              break
-            }
-
-            if (heredoc.stripTabs) line = line.replace(/^\t+/, "")
-
-            if (line === heredoc.delimiter) {
-              complete = true
-
-              tokens[heredoc.index] = {
-                ...tokens[heredoc.index]!,
-                heredoc: { body, quoted: heredoc.quoted },
-                substitutions: heredoc.quoted
-                  ? undefined
-                  : heredocSubstitutions(body),
-              }
-              break
-            }
-
-            body += line + (newline ? "\n" : "")
-          }
-
-          if (!complete) {
-            throw new Error("Cannot validate an incomplete heredoc. Close its delimiter on a separate line before running the command.")
+          i = body.end
+          tokens[heredoc.index] = {
+            ...tokens[heredoc.index]!,
+            heredoc: { body: body.content, quoted: heredoc.quoted },
+            substitutions: heredoc.quoted ? undefined : heredocSubstitutions(body.content),
           }
         }
 
@@ -458,7 +522,7 @@ export function tokenizeShell(command: string): ShellToken[] {
     let value = ""
     const wordBytes: number[] = []
     let quoted = false
-    let unsupportedDelimiter = false
+    let unsupportedDelimiter: "ANSI-C quoted" | "locale-quoted" | undefined
     let expansion = false
     const substitutions: string[] = []
 
@@ -486,13 +550,22 @@ export function tokenizeShell(command: string): ShellToken[] {
         continue
       }
 
+      if (current === "$") {
+        let quoteStart = i + 1
+
+        while (command[quoteStart] === "\\" && command[quoteStart + 1] === "\n") quoteStart += 2
+
+        if (command[quoteStart] === '"') unsupportedDelimiter = "locale-quoted"
+        else if (command[quoteStart] === "'") unsupportedDelimiter = "ANSI-C quoted"
+      }
+
       if (current === "$" && command[i + 1] === "'") {
         const quoteStart = i
 
         wordBytes.push(...Buffer.from(value))
         value = ""
         quoted = true
-        unsupportedDelimiter = true
+        unsupportedDelimiter = "ANSI-C quoted"
         i += 2
         const bytes: number[] = []
         let complete = false
@@ -575,7 +648,7 @@ export function tokenizeShell(command: string): ShellToken[] {
               i += 2
             }
           } else if (quotedCharacter === "$" && command[i + 1] === "(") {
-            const substitution = consumeCommandSubstitution(command, i)
+            const substitution = consumeCommandSubstitution(command, i, nesting)
             value += command.slice(i, substitution.end)
             substitutions.push(substitution.content)
             expansion = true
@@ -609,7 +682,7 @@ export function tokenizeShell(command: string): ShellToken[] {
       }
 
       if (current === "$" && command[i + 1] === "(") {
-        const substitution = consumeCommandSubstitution(command, i)
+        const substitution = consumeCommandSubstitution(command, i, nesting)
         value += command.slice(i, substitution.end)
         substitutions.push(substitution.content)
         expansion = true
@@ -641,16 +714,19 @@ export function tokenizeShell(command: string): ShellToken[] {
     pushWord(tokens, value, substitutions, expansion)
 
     if (pendingDelimiter !== undefined) {
-      if (unsupportedDelimiter) {
-        throw new Error("Cannot validate an ANSI-C quoted heredoc delimiter. Use a plain quoted delimiter such as <<'EOF'.")
+      if (unsupportedDelimiter !== undefined) {
+        throw new Error(`Cannot validate this ${unsupportedDelimiter} heredoc delimiter. Use a plain quoted delimiter such as <<'EOF'.`)
       }
 
-      pendingHeredocs.push({ index: pendingDelimiter, delimiter: value, quoted, stripTabs: tokens[pendingDelimiter]?.value.endsWith("-") === true })
+      const delimiter = { delimiter: value, quoted, stripTabs: tokens[pendingDelimiter]?.value.endsWith("-") === true }
+
+      if (delimiterOnly) return { tokens, end: i, delimiter }
+      pendingHeredocs.push({ index: pendingDelimiter, ...delimiter })
       pendingDelimiter = undefined
     }
   }
 
-  return tokens
+  return { tokens, end: i }
 }
 
 function splitSimpleCommands(tokens: readonly ShellToken[]): { tokens: ShellToken[]; pipeline: boolean }[] {
