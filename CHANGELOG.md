@@ -2,6 +2,15 @@
 
 All notable changes to `opencode-commit-guard` are documented in this file.
 
+## 1.0.7 (2026-11-04)
+
+- Accept heredocs inside command substitutions, so quotes or parentheses in a heredoc body no longer cause a false rejection.
+- Report the kind and opening position of unterminated quotes, backticks, and `$(` substitutions, and suggest a fix instead of "Run git commit directly".
+- Keep braces attached to shell words and ANSI-C control escapes inside their quotes, so later commit options cannot escape validation.
+- Bound substitutions with shell quote rules, decode escaped double quotes in double-quoted backticks, and join unquoted heredoc continuation lines before delimiter matching.
+- Reject syntax the parser cannot read reliably: nested quoting in double-quoted parameters, `case` patterns in substitutions, ANSI-C quotes in literal `sh -c` bodies, and locale-quoted or continued dollar-quoted heredoc delimiters.
+- Load the anti-slop Oxlint rules from the upstream `oxlint-plugin-anti-slop` package instead of a vendored copy.
+
 ## 1.0.6 (2026-10-29)
 
 - Report the capture outcome in the shell result, so agents can commit after "Frozen commit baseline" without a second `commit_context` call.
