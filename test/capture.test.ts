@@ -1,16 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import {
-  chmodSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { cleanup, createPending, importCapture } from "../src/capture.js";
+import { createTempRepo, withPlatform } from "./helpers.js";
 
 const { join } = path;
 
@@ -22,14 +15,17 @@ afterEach(() => {
   }
 });
 
-const prepare = function prepare() {
-  const directory = mkdtempSync(join(tmpdir(), "commit-guard-capture-"));
+const prepare = (watchdogSeconds = 15) => {
+  const directory = createTempRepo(teardown);
 
-  teardown.push(() => {
-    rmSync(directory, { recursive: true, force: true });
-  });
-  expect(Bun.spawnSync(["git", "init", "-q", directory]).exitCode).toBe(0);
-  const pending = createPending("scope", "session", "build", 0, directory);
+  const pending = createPending(
+    "scope",
+    "session",
+    "build",
+    0,
+    directory,
+    watchdogSeconds
+  );
 
   teardown.push(() => {
     cleanup(pending);
@@ -93,9 +89,9 @@ describe("private context capture", () => {
   );
 
   test.skipIf(process.platform === "win32")(
-    "kills the capture process group after 15 seconds",
+    "kills the capture process group at the watchdog deadline",
     () => {
-      const pending = prepare();
+      const pending = prepare(1.5);
       const bin = join(pending.workdir, "git");
 
       writeFileSync(bin, "#!/bin/sh\nsleep 30\n", { mode: 0o700 });
@@ -109,10 +105,10 @@ describe("private context capture", () => {
 
       expect(result.exitCode).not.toBe(0);
       expect(result.stdout.toString()).not.toContain("RECEIPT_OK");
-      expect(Date.now() - started).toBeLessThan(19_000);
+      expect(Date.now() - started).toBeLessThan(5000);
       expect(() => importCapture(pending)).toThrow();
     },
-    20_000
+    6000
   );
 
   test.skipIf(process.platform === "win32")(
@@ -131,30 +127,14 @@ describe("private context capture", () => {
       expect(() => importCapture(pending)).toThrow(
         "Invalid private capture artifact"
       );
-      const platform = Object.getOwnPropertyDescriptor(process, "platform");
-
-      if (platform === undefined) {
-        throw new Error("Missing platform descriptor");
-      }
-
-      try {
-        Object.defineProperty(process, "platform", { value: "win32" });
+      withPlatform("win32", () => {
         expect(importCapture(pending).directory).toBe(pending.workdir);
-      } finally {
-        Object.defineProperty(process, "platform", platform);
-      }
+      });
     }
   );
 
   test("generates a shell-neutral Windows command with a private encoded path", () => {
-    const platform = Object.getOwnPropertyDescriptor(process, "platform");
-
-    if (platform === undefined) {
-      throw new Error("Missing platform descriptor");
-    }
-
-    try {
-      Object.defineProperty(process, "platform", { value: "win32" });
+    withPlatform("win32", () => {
       const pending = prepare();
 
       expect(pending.command).toStartWith(
@@ -162,9 +142,7 @@ describe("private context capture", () => {
       );
       expect(pending.command).toMatch(/-EncodedCommand [A-Za-z0-9+/=]+$/u);
       expect(pending.command.length).toBeLessThan(8191);
-    } finally {
-      Object.defineProperty(process, "platform", platform);
-    }
+    });
   });
 
   test.skipIf(process.platform !== "win32")(

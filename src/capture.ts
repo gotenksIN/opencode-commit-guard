@@ -28,7 +28,7 @@ const version = 1;
 
 const maxBytes = 262_144;
 
-export const captureTimeout = 20_000;
+const captureTimeout = 20_000;
 
 const policy = "commit-guard-context-v1";
 
@@ -63,16 +63,15 @@ export interface Pending {
   closed?: boolean;
 }
 
-const digest = function digest(text: string): string {
-  return createHash("sha256").update(text).digest("hex");
-};
+const digest = (text: string): string =>
+  createHash("sha256").update(text).digest("hex");
 
-export const scopeFor = function scopeFor(
+export const scopeFor = (
   ctx: Context,
   sessionID: string,
   config: CommitGuardConfig,
   targetDir?: string
-): string {
+): string => {
   const { location } = ctx;
 
   const directory = targetDir ?? location.directory;
@@ -93,7 +92,7 @@ export const scopeFor = function scopeFor(
   );
 };
 
-export const isGitDirectory = function isGitDirectory(dir: string): boolean {
+const isGitDirectory = (dir: string): boolean => {
   try {
     return existsSync(join(dir, ".git"));
   } catch {
@@ -101,9 +100,7 @@ export const isGitDirectory = function isGitDirectory(dir: string): boolean {
   }
 };
 
-export const findGitRoot = function findGitRoot(
-  startDir: string
-): string | undefined {
+export const findGitRoot = (startDir: string): string | undefined => {
   let current: string;
 
   try {
@@ -129,21 +126,15 @@ export const findGitRoot = function findGitRoot(
   return undefined;
 };
 
-export interface ResolvedTargetWorkdir {
+interface ResolvedTargetWorkdir {
   readonly workdir?: string;
   readonly error?: string;
 }
 
-export const findSubRepos = function findSubRepos(
-  dir: string,
-  maxDepth = 2
-): string[] {
+const findSubRepos = (dir: string, maxDepth = 2): string[] => {
   const repos: string[] = [];
 
-  const search = function search(
-    currentDir: string,
-    currentDepth: number
-  ): void {
+  const search = (currentDir: string, currentDepth: number): void => {
     if (currentDepth > maxDepth) {
       return;
     }
@@ -182,10 +173,10 @@ export const findSubRepos = function findSubRepos(
   return repos;
 };
 
-export const resolveTargetWorkdir = function resolveTargetWorkdir(
+export const resolveTargetWorkdir = (
   baseDir: string,
   requestedDir?: string
-): ResolvedTargetWorkdir {
+): ResolvedTargetWorkdir => {
   if (requestedDir !== undefined) {
     const resolvedDir = resolve(baseDir, requestedDir);
 
@@ -237,19 +228,12 @@ export const resolveTargetWorkdir = function resolveTargetWorkdir(
   };
 };
 
-const counterKey = function counterKey(scope: string): string {
-  return `counter/${scope}`;
-};
+const counterKey = (scope: string): string => `counter/${scope}`;
 
-const prefix = function prefix(scope: string): string {
-  return `snap/${scope}/`;
-};
+const prefix = (scope: string): string => `snap/${scope}/`;
 
-export const counter = function counter(
-  ctx: Context,
-  scope: string
-): Effect.Effect<number> {
-  return Effect.gen(function* readCounter() {
+export const counter = (ctx: Context, scope: string): Effect.Effect<number> =>
+  Effect.gen(function* readCounter() {
     const value = yield* ctx.storage.get(counterKey(scope));
 
     if (value === undefined) {
@@ -260,13 +244,12 @@ export const counter = function counter(
       ? Number(value)
       : -1;
   });
-};
 
-export const invalidate = function invalidate(
+export const invalidate = (
   ctx: Context,
   scope: string
-): Effect.Effect<number> {
-  return storageLock.withPermits(1)(
+): Effect.Effect<number> =>
+  storageLock.withPermits(1)(
     Effect.gen(function* incrementCounter() {
       const previous = yield* counter(ctx, scope);
 
@@ -277,35 +260,28 @@ export const invalidate = function invalidate(
       return next;
     })
   );
-};
 
-export const invalidateOwned = function invalidateOwned(
+export const invalidateOwned = (
   ctx: Context,
   attempt: Pending
-): Effect.Effect<void> {
-  return storageLock.withPermits(1)(
+): Effect.Effect<void> =>
+  storageLock.withPermits(1)(
     Effect.gen(function* invalidateAttempt() {
       if ((yield* counter(ctx, attempt.scope)) === attempt.counter) {
         yield* ctx.storage.set(counterKey(attempt.scope), attempt.counter + 1);
       }
     })
   );
-};
 
-export type CaptureState =
-  | "prepared"
-  | "claimed"
-  | "published"
-  | "expired"
-  | "failed";
+type CaptureState = "prepared" | "claimed" | "published" | "expired" | "failed";
 
-export const recordState = function recordState(
+export const recordState = (
   ctx: Context,
   attempt: Pending,
   state: CaptureState,
   reason = ""
-): Effect.Effect<void> {
-  return storageLock.withPermits(1)(
+): Effect.Effect<void> =>
+  storageLock.withPermits(1)(
     Effect.gen(function* storeState() {
       if ((yield* counter(ctx, attempt.scope)) !== attempt.counter) {
         return;
@@ -317,14 +293,12 @@ export const recordState = function recordState(
       });
     })
   );
-};
 
-export const captureStatus = function captureStatus(
+export const captureStatus = (
   ctx: Context,
   scope: string
-): Effect.Effect<string> {
-  return Effect.gen(function* readCaptureStatus() {
-    // SAFETY: Plugin storage contains JSON; validate the record before reading its fields.
+): Effect.Effect<string> =>
+  Effect.gen(function* readCaptureStatus() {
     const value = yield* ctx.storage.get(`state/${scope}`);
 
     if (!isRecord(value)) {
@@ -345,11 +319,10 @@ export const captureStatus = function captureStatus(
 
     return "";
   });
-};
 
-const validBaseline = function validBaseline(
+const validBaseline = (
   value: JsonValue | undefined
-): value is Baseline & Record<string, JsonValue> {
+): value is Baseline & Record<string, JsonValue> => {
   if (!isRecord(value)) {
     return false;
   }
@@ -372,11 +345,45 @@ const validBaseline = function validBaseline(
   );
 };
 
-export const load = function load(
+const scanStoragePrefix = (
+  ctx: Context,
+  keyPrefix: string,
+  visitor: (entry: { key: string; value: JsonValue }) => Effect.Effect<void>
+): Effect.Effect<void> =>
+  Effect.gen(function* scan() {
+    let after: string | undefined;
+
+    do {
+      const page = yield* ctx.storage.scan({
+        prefix: keyPrefix,
+        after,
+        limit: 100,
+      });
+
+      for (const entry of page.entries) {
+        yield* visitor(entry);
+      }
+
+      after = page.next;
+    } while (after !== undefined);
+  });
+
+const snapshotChecksum = (
+  scope: string,
+  count: number,
+  generation: string,
+  sequence: string,
+  baseline: Baseline
+): string =>
+  digest(
+    JSON.stringify([version, scope, count, generation, sequence, baseline])
+  );
+
+export const load = (
   ctx: Context,
   scope: string
-): Effect.Effect<Baseline | undefined> {
-  return storageLock.withPermits(1)(
+): Effect.Effect<Baseline | undefined> =>
+  storageLock.withPermits(1)(
     Effect.gen(function* readBaseline() {
       const current = yield* counter(ctx, scope);
 
@@ -384,18 +391,9 @@ export const load = function load(
         return yield* Effect.succeed(undefined);
       }
 
-      let after: string | undefined;
       let newest: { sequence: string; baseline: Baseline } | undefined;
-
-      do {
-        const page = yield* ctx.storage.scan({
-          prefix: prefix(scope),
-          after,
-          limit: 100,
-        });
-
-        for (const record of page.entries) {
-          // SAFETY: Storage returns arbitrary JSON that is checked before reading any entry fields.
+      yield* scanStoragePrefix(ctx, prefix(scope), (record) =>
+        Effect.sync(() => {
           const raw = record.value;
 
           if (
@@ -408,41 +406,35 @@ export const load = function load(
             !isJSONString(raw.checksum) ||
             !validBaseline(raw.baseline)
           ) {
-            continue;
+            return;
           }
 
           const { baseline } = raw;
 
           if (
-            digest(
-              JSON.stringify([
-                version,
-                scope,
-                current,
-                raw.generation,
-                raw.sequence,
-                baseline,
-              ])
+            snapshotChecksum(
+              scope,
+              current,
+              raw.generation,
+              raw.sequence,
+              baseline
             ) !== raw.checksum
           ) {
-            continue;
+            return;
           }
 
           if (newest === undefined || raw.sequence > newest.sequence) {
             newest = { sequence: raw.sequence, baseline };
           }
-        }
-
-        after = page.next;
-      } while (after !== undefined);
+        })
+      );
 
       return newest?.baseline;
     })
   );
-};
 
 // Each line is a base64-encoded Git result. No Git output enters the shell result.
-const captureCommand = function captureCommand(path: string): string {
+const captureCommand = (path: string, watchdogSeconds: number): string => {
   if (process.platform === "win32") {
     return windowsCaptureCommand(path);
   }
@@ -469,7 +461,7 @@ printf "RECEIPT_OK\\n"`;
 bash -c "$1" bash "$2" &
 worker=$!
 (
-  sleep 15 &
+  sleep ${watchdogSeconds} &
   timer=$!
   trap "kill $timer 2>/dev/null" EXIT
   trap "exit 0" TERM
@@ -484,9 +476,7 @@ wait "$watchdog" 2>/dev/null
 exit "$status"' bash '${script.replaceAll("'", "'\\''")}' ${quoted} 2>/dev/null`;
 };
 
-const windowsCaptureCommand = function windowsCaptureCommand(
-  path: string
-): string {
+const windowsCaptureCommand = (path: string): string => {
   // EncodedCommand avoids quoting differences between cmd, PowerShell, and Git Bash.
   const script = `$ErrorActionPreference = 'Stop'
 $clock = [Diagnostics.Stopwatch]::StartNew()
@@ -565,13 +555,14 @@ try {
   return `powershell -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(bootstrap, "utf16le").toString("base64")}`;
 };
 
-export const createPending = function createPending(
+export const createPending = (
   scope: string,
   sessionID: string,
   agent: string,
   counterValue: number,
-  workdir: string
-): Pending {
+  workdir: string,
+  watchdogSeconds = 15
+): Pending => {
   const directory = mkdtempSync(join(tmpdir(), "commit-context-"));
 
   try {
@@ -598,7 +589,7 @@ export const createPending = function createPending(
       fd,
       identity: { dev: stat.dev, ino: stat.ino, uid: stat.uid },
       expires: Date.now() + captureTimeout,
-      command: captureCommand(file),
+      command: captureCommand(file, watchdogSeconds),
     };
   } catch (error) {
     rmSync(directory, { recursive: true, force: true });
@@ -606,7 +597,7 @@ export const createPending = function createPending(
   }
 };
 
-export const cleanup = function cleanup(pending: Pending): void {
+export const cleanup = (pending: Pending): void => {
   if (pending.closed === true) {
     return;
   }
@@ -616,7 +607,7 @@ export const cleanup = function cleanup(pending: Pending): void {
   rmSync(pending.directory, { recursive: true, force: true });
 };
 
-const decode = function decode(line: string): string {
+const decode = (line: string): string => {
   if (
     !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(
       line
@@ -628,44 +619,36 @@ const decode = function decode(line: string): string {
   return Buffer.from(line, "base64").toString("utf-8");
 };
 
-export const importCapture = function importCapture(
-  pending: Pending
-): Baseline {
-  const readArtifact = () => {
-    const stat = fstatSync(pending.fd);
+const readCaptureArtifact = (pending: Pending): string[] => {
+  const stat = fstatSync(pending.fd);
 
-    if (
-      !stat.isFile() ||
-      stat.dev !== pending.identity.dev ||
-      stat.ino !== pending.identity.ino ||
-      stat.uid !== pending.identity.uid ||
-      (process.platform !== "win32" && (stat.mode & 0o777) !== 0o600) ||
-      stat.size > maxBytes ||
-      stat.size === 0
-    ) {
-      throw new Error("Invalid private capture artifact");
-    }
+  if (
+    !stat.isFile() ||
+    stat.dev !== pending.identity.dev ||
+    stat.ino !== pending.identity.ino ||
+    stat.uid !== pending.identity.uid ||
+    (process.platform !== "win32" && (stat.mode & 0o777) !== 0o600) ||
+    stat.size > maxBytes ||
+    stat.size === 0
+  ) {
+    throw new Error("Invalid private capture artifact");
+  }
 
-    const bytes = Buffer.alloc(stat.size);
+  const bytes = Buffer.alloc(stat.size);
 
-    if (readSync(pending.fd, bytes, 0, stat.size, 0) !== stat.size) {
-      throw new Error("Incomplete private capture artifact");
-    }
+  if (readSync(pending.fd, bytes, 0, stat.size, 0) !== stat.size) {
+    throw new Error("Incomplete private capture artifact");
+  }
 
-    const completed = fstatSync(pending.fd);
+  const completed = fstatSync(pending.fd);
 
-    if (
-      completed.size !== stat.size ||
-      completed.dev !== stat.dev ||
-      completed.ino !== stat.ino
-    ) {
-      throw new Error("Capture changed during import");
-    }
-
-    return bytes;
-  };
-
-  const bytes = readArtifact();
+  if (
+    completed.size !== stat.size ||
+    completed.dev !== stat.dev ||
+    completed.ino !== stat.ino
+  ) {
+    throw new Error("Capture changed during import");
+  }
 
   const fields = bytes.toString("utf-8").split("\n");
 
@@ -678,6 +661,44 @@ export const importCapture = function importCapture(
     throw new Error("Incomplete capture");
   }
 
+  return fields;
+};
+
+const decodeConfigField = (state: string, field: string): string | null => {
+  if (state === "set") {
+    return decode(field).trim();
+  }
+
+  return state === "unset" ? null : "error";
+};
+
+const assertBaselineIdentity = (
+  baseline: Baseline,
+  fields: readonly string[],
+  rawLog: string
+): void => {
+  const { directory, gitDir, commonDir, head, messages } = baseline;
+
+  if (
+    !isAbsolute(directory) ||
+    !isAbsolute(gitDir) ||
+    !isAbsolute(commonDir) ||
+    directory !== findGitRoot(baseline.workdir) ||
+    !["branch", "detached"].includes(fields[4]) ||
+    !["head", "unborn"].includes(fields[6]) ||
+    (head !== null && !/^[a-f0-9]{40,64}$/u.test(head)) ||
+    (head === null && rawLog !== "") ||
+    (head !== null &&
+      (messages.length === 0 ||
+        messages.length > 10 ||
+        !rawLog.endsWith("\0\0")))
+  ) {
+    throw new Error("Invalid Git baseline");
+  }
+};
+
+export const importCapture = (pending: Pending): Baseline => {
+  const fields = readCaptureArtifact(pending);
   const rawRoot = decode(fields[1]).trimEnd();
   const root = isAbsolute(rawRoot) ? realpathSync(resolve(rawRoot)) : rawRoot;
   const gitDir = decode(fields[2]).trimEnd();
@@ -691,50 +712,16 @@ export const importCapture = function importCapture(
       ? []
       : rawLog.split("\0\0").filter((message) => message.length > 0);
 
-  const validateIdentity = () => {
-    if (
-      !isAbsolute(root) ||
-      !isAbsolute(gitDir) ||
-      !isAbsolute(commonDir) ||
-      root !== findGitRoot(pending.workdir) ||
-      !["branch", "detached"].includes(fields[4]) ||
-      !["head", "unborn"].includes(fields[6]) ||
-      (head !== null && !/^[a-f0-9]{40,64}$/u.test(head)) ||
-      (head === null && rawLog !== "") ||
-      (head !== null &&
-        (messages.length === 0 ||
-          messages.length > 10 ||
-          !rawLog.endsWith("\0\0")))
-    ) {
-      throw new Error("Invalid Git baseline");
-    }
-  };
-
-  validateIdentity();
-
-  const [configState] = fields.slice(9);
+  // Decode the boolean field even when unset, preserving strict base64 framing.
   const value = decode(fields[10]).trim();
 
-  const readSigningPolicy = (): Baseline["gpgsign"] => {
-    if (configState === "set" && (value === "true" || value === "false")) {
-      return value;
-    }
+  let gpgsign: Baseline["gpgsign"] = fields[9] === "unset" ? "unset" : "error";
 
-    return configState === "unset" ? "unset" : "error";
-  };
+  if (fields[9] === "set" && (value === "true" || value === "false")) {
+    gpgsign = value;
+  }
 
-  const readSigningKey = () => {
-    if (fields[11] === "set") {
-      return decode(fields[12]).trim();
-    }
-
-    return fields[11] === "unset" ? null : "error";
-  };
-
-  const gpgsign = readSigningPolicy();
-  const signingkey = readSigningKey();
-
-  return {
+  const baseline: Baseline = {
     directory: root,
     workdir: pending.workdir,
     gitDir,
@@ -743,17 +730,21 @@ export const importCapture = function importCapture(
     head,
     messages,
     gpgsign,
-    signingkey,
+    signingkey: decodeConfigField(fields[11], fields[12]),
   };
+
+  assertBaselineIdentity(baseline, fields, rawLog);
+
+  return baseline;
 };
 
-export const publish = function publish(
+export const publish = (
   ctx: Context,
   pending: Pending,
   generation: string,
   baseline: Baseline
-): Effect.Effect<boolean> {
-  return storageLock.withPermits(1)(
+): Effect.Effect<boolean> =>
+  storageLock.withPermits(1)(
     Effect.gen(function* writeBaseline() {
       if ((yield* counter(ctx, pending.scope)) !== pending.counter) {
         return false;
@@ -761,15 +752,12 @@ export const publish = function publish(
 
       const sequence = `${Date.now().toString().padStart(15, "0")}-${randomUUID()}`;
 
-      const checksum = digest(
-        JSON.stringify([
-          version,
-          pending.scope,
-          pending.counter,
-          generation,
-          sequence,
-          baseline,
-        ])
+      const checksum = snapshotChecksum(
+        pending.scope,
+        pending.counter,
+        generation,
+        sequence,
+        baseline
       );
 
       yield* ctx.storage.set(prefix(pending.scope) + sequence, {
@@ -782,25 +770,14 @@ export const publish = function publish(
         baseline: { ...baseline, messages: [...baseline.messages] },
       });
 
-      let after: string | undefined;
-
-      do {
-        const page = yield* ctx.storage.scan({
-          prefix: prefix(pending.scope),
-          after,
-          limit: 100,
-        });
-
-        for (const record of page.entries) {
+      yield* scanStoragePrefix(ctx, prefix(pending.scope), (record) =>
+        Effect.gen(function* removeOld() {
           if (record.key < prefix(pending.scope) + sequence) {
             yield* ctx.storage.remove(record.key);
           }
-        }
-
-        after = page.next;
-      } while (after !== undefined);
+        })
+      );
 
       return true;
     })
   );
-};

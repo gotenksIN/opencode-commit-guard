@@ -2,29 +2,19 @@ import type { Schema } from "effect";
 
 export type JsonValue = Schema.Json;
 
-export const isJSONString = function isJSONString(
-  value: JsonValue | undefined
-): value is string {
-  return Object.prototype.toString.call(value) === "[object String]";
-};
+export const isJSONString = (value: unknown): value is string =>
+  Object.prototype.toString.call(value) === "[object String]";
 
-export const isJSONNumber = function isJSONNumber(
-  value: JsonValue | undefined
-): value is number {
-  return Object.prototype.toString.call(value) === "[object Number]";
-};
+export const isJSONNumber = (value: unknown): value is number =>
+  Object.prototype.toString.call(value) === "[object Number]";
 
-export const isJSONBoolean = function isJSONBoolean(
-  value: JsonValue | undefined
-): value is boolean {
-  return Object.prototype.toString.call(value) === "[object Boolean]";
-};
+export const isJSONBoolean = (value: unknown): value is boolean =>
+  Object.prototype.toString.call(value) === "[object Boolean]";
 
-export const isRecord = function isRecord(
-  value: JsonValue | undefined
-): value is Record<string, JsonValue> {
-  return value instanceof Object && !Array.isArray(value);
-};
+export const isRecord = (
+  value: unknown
+): value is Record<string, JsonValue | undefined> =>
+  Object.prototype.toString.call(value) === "[object Object]";
 
 export interface CommitGuardConfig {
   readonly requireScope: boolean;
@@ -63,10 +53,4 @@ export interface GitCommitInvocation {
   readonly targetError?: string;
   readonly messageExpansion?: boolean;
   readonly hasTrailer?: boolean;
-}
-
-export interface OverlongLine {
-  readonly lineNumber: number;
-  readonly length: number;
-  readonly text: string;
 }

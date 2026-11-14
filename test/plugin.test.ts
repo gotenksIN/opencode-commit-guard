@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,9 +15,11 @@ import type { Plugin } from "@opencode/plugin/effect";
 import { DateTime, Effect, Exit, Schema, Scope, Stream } from "effect";
 
 import plugin from "../index.js";
+import { resolveTargetWorkdir } from "../src/capture.js";
 import { parseConfig } from "../src/config.js";
 import type { JsonValue } from "../src/types.js";
-import { isJSONString, isRecord } from "../src/types.js";
+import { isJSONString } from "../src/types.js";
+import { createTempRepo, expectRejects, withFakeNow } from "./helpers.js";
 
 const { join } = path;
 
@@ -32,37 +35,52 @@ interface HookFailures {
   "execute.after": never;
 }
 
+type HookRegistry<Names extends keyof HookEvents = keyof HookEvents> = {
+  [Name in Names]?: (
+    event: HookEvents[Name]
+  ) => Effect.Effect<void, HookFailures[Name]>;
+};
+
 const unused = (method: string) => () => Effect.die(`unused ${method}`);
+
+const hasDomainMethods = <Key extends string>(
+  table: Record<string, () => Effect.Effect<never>>,
+  methods: readonly Key[]
+): table is Record<Key, () => Effect.Effect<never>> =>
+  methods.every((method) => Object.hasOwn(table, method));
+
+const domainMethods = <Key extends string>(
+  domain: string,
+  methods: readonly Key[]
+) => {
+  const table = Object.fromEntries(
+    methods.map((method) => [method, unused(`${domain}.${method}`)])
+  );
+
+  if (!hasDomainMethods(table, methods)) {
+    throw new Error(`Incomplete ${domain} stub`);
+  }
+
+  return table;
+};
 
 const unusedDomains = {
   app: { name: "test", version: "test", channel: "test" },
-  agent: {
-    get: unused("agent.get"),
-    list: unused("agent.list"),
-    transform: unused("agent.transform"),
-    reload: unused("agent.reload"),
-  },
-  aisdk: { hook: unused("aisdk.hook") },
-  command: {
-    list: unused("command.list"),
-    transform: unused("command.transform"),
-    reload: unused("command.reload"),
-  },
-  credential: { activate: unused("credential.activate") },
+  agent: domainMethods("agent", ["get", "list", "transform", "reload"]),
+  aisdk: domainMethods("aisdk", ["hook"]),
+  command: domainMethods("command", ["list", "transform", "reload"]),
+  credential: domainMethods("credential", ["activate"]),
   event: {
     subscribe: () => Stream.fromEffect(Effect.die("unused event.subscribe")),
   },
   experimental: {
-    terminal: { read: unused("experimental.terminal.read") },
-    generate: {
-      text: unused("experimental.generate.text"),
-      image: unused("experimental.generate.image"),
-      decisions: unused("experimental.generate.decisions"),
-    },
-    artifact: {
-      transform: unused("experimental.artifact.transform"),
-      reload: unused("experimental.artifact.reload"),
-    },
+    terminal: domainMethods("experimental.terminal", ["read"]),
+    generate: domainMethods("experimental.generate", [
+      "text",
+      "image",
+      "decisions",
+    ]),
+    artifact: domainMethods("experimental.artifact", ["transform", "reload"]),
   },
   generate: { text: unused("generate.text") },
   integration: {
@@ -70,118 +88,110 @@ const unusedDomains = {
     get: unused("integration.get"),
     transform: unused("integration.transform"),
     reload: unused("integration.reload"),
-    connect: {
-      key: unused("integration.connect.key"),
-      external: unused("integration.connect.external"),
-    },
-    oauth: {
-      connect: unused("integration.oauth.connect"),
-      status: unused("integration.oauth.status"),
-      complete: unused("integration.oauth.complete"),
-      cancel: unused("integration.oauth.cancel"),
-    },
-    command: {
-      connect: unused("integration.command.connect"),
-      status: unused("integration.command.status"),
-      cancel: unused("integration.command.cancel"),
-    },
-    connection: {
-      active: unused("integration.connection.active"),
-      resolve: unused("integration.connection.resolve"),
-      status: unused("integration.connection.status"),
-    },
+    connect: domainMethods("integration.connect", ["key", "external"]),
+    oauth: domainMethods("integration.oauth", [
+      "connect",
+      "status",
+      "complete",
+      "cancel",
+    ]),
+    command: domainMethods("integration.command", [
+      "connect",
+      "status",
+      "cancel",
+    ]),
+    connection: domainMethods("integration.connection", [
+      "active",
+      "resolve",
+      "status",
+    ]),
   },
-  mcp: {
-    list: unused("mcp.list"),
-    transform: unused("mcp.transform"),
-    reload: unused("mcp.reload"),
-  },
-  model: {
-    list: unused("model.list"),
-    default: unused("model.default"),
-    transform: unused("model.transform"),
-    reload: unused("model.reload"),
-  },
-  permission: {
-    list: unused("permission.list"),
-    get: unused("permission.get"),
-    reply: unused("permission.reply"),
-    hook: unused("permission.hook"),
-    assert: unused("permission.assert"),
-  },
+  mcp: domainMethods("mcp", ["list", "transform", "reload"]),
+  model: domainMethods("model", ["list", "default", "transform", "reload"]),
+  permission: domainMethods("permission", [
+    "list",
+    "get",
+    "reply",
+    "hook",
+    "assert",
+  ]),
   plugin: { list: unused("plugin.list") },
-  provider: {
-    list: unused("provider.list"),
-    get: unused("provider.get"),
-    transform: unused("provider.transform"),
-    reload: unused("provider.reload"),
-  },
-  reference: {
-    list: unused("reference.list"),
-    transform: unused("reference.transform"),
-    reload: unused("reference.reload"),
-  },
+  provider: domainMethods("provider", ["list", "get", "transform", "reload"]),
+  reference: domainMethods("reference", ["list", "transform", "reload"]),
   rpc: Object.assign(() => Effect.runSync(Effect.die("unused rpc.call")), {
     register: unused("rpc.register"),
   }),
-  shell: { hook: unused("shell.hook") },
-  skill: {
-    list: unused("skill.list"),
-    transform: unused("skill.transform"),
-    reload: unused("skill.reload"),
-  },
+  shell: domainMethods("shell", ["hook"]),
+  skill: domainMethods("skill", ["list", "transform", "reload"]),
   vcs: {
     get: unused("vcs.get"),
     base: unused("vcs.base"),
     status: unused("vcs.status"),
     diff: unused("vcs.diff"),
-    branch: { list: unused("vcs.branch.list") },
+    branch: domainMethods("vcs.branch", ["list"]),
     transform: unused("vcs.transform"),
     reload: unused("vcs.reload"),
   },
-  websearch: {
-    providers: unused("websearch.providers"),
-    query: unused("websearch.query"),
-    transform: unused("websearch.transform"),
-    reload: unused("websearch.reload"),
-  },
-  worktree: {
-    list: unused("worktree.list"),
-    create: unused("worktree.create"),
-    remove: unused("worktree.remove"),
-    refresh: unused("worktree.refresh"),
-    transform: unused("worktree.transform"),
-    reload: unused("worktree.reload"),
-  },
+  websearch: domainMethods("websearch", [
+    "providers",
+    "query",
+    "transform",
+    "reload",
+  ]),
+  worktree: domainMethods("worktree", [
+    "list",
+    "create",
+    "remove",
+    "refresh",
+    "transform",
+    "reload",
+  ]),
 };
 
 const unusedSession = {
-  list: unused("session.list"),
-  create: unused("session.create"),
-  remove: unused("session.remove"),
-  switchAgent: unused("session.switchAgent"),
-  switchModel: unused("session.switchModel"),
-  prompt: unused("session.prompt"),
-  generate: unused("session.generate"),
-  command: unused("session.command"),
-  compact: unused("session.compact"),
-  synthetic: unused("session.synthetic"),
-  interrupt: unused("session.interrupt"),
-  update: unused("session.update"),
-  move: unused("session.move"),
-  context: unused("session.context"),
-  wait: unused("session.wait"),
+  ...domainMethods("session", [
+    "list",
+    "create",
+    "remove",
+    "switchAgent",
+    "switchModel",
+    "prompt",
+    "generate",
+    "command",
+    "compact",
+    "synthetic",
+    "interrupt",
+    "update",
+    "move",
+    "context",
+    "wait",
+    "hook",
+  ]),
   instructions: {
-    entry: {
-      list: unused("session.instructions.entry.list"),
-      put: unused("session.instructions.entry.put"),
-      remove: unused("session.instructions.entry.remove"),
-    },
+    entry: domainMethods("session.instructions.entry", [
+      "list",
+      "put",
+      "remove",
+    ]),
   },
-  hook: unused("session.hook"),
 };
 
 const teardown: (() => void | Promise<void>)[] = [];
+
+const runCapture = (command: string, directory: string) => {
+  const captured = Bun.spawnSync(["bash", "-c", command], {
+    cwd: directory,
+    env: {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: join(directory, "global-config"),
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_COUNT: "0",
+    },
+  });
+
+  expect(captured.exitCode).toBe(0);
+  expect(captured.stdout.toString()).toBe("RECEIPT_OK\n");
+};
 
 afterEach(async () => {
   await Effect.runPromise(
@@ -200,34 +210,15 @@ const setupTestPlugin = async function setupTestPlugin(
   options: Record<string, JsonValue> = {},
   signing: "true" | "false" | "unset" | "error" | "missing" = "true",
   sessionDirectory = import.meta.dir,
-  stored = new Map<string, JsonValue>()
+  stored = new Map<string, JsonValue>(),
+  workspace: "local" | "remote" | "mismatch" = "local"
 ) {
   const directory =
     signing === "missing"
       ? sessionDirectory
-      : mkdtempSync(join(tmpdir(), "commit-guard-fixture-"));
+      : createTempRepo(teardown, signing === "unset" ? undefined : signing);
 
-  if (signing !== "missing") {
-    teardown.push(() => {
-      rmSync(directory, { recursive: true, force: true });
-    });
-    expect(Bun.spawnSync(["git", "init", "-q", directory]).exitCode).toBe(0);
-
-    if (signing !== "unset") {
-      expect(
-        Bun.spawnSync([
-          "git",
-          "-C",
-          directory,
-          "config",
-          "commit.gpgsign",
-          signing,
-        ]).exitCode
-      ).toBe(0);
-    }
-  }
-
-  const hooks = new Map<string, () => Effect.Effect<void, Tool.Error>>();
+  const hooks: HookRegistry = {};
   const tools = new Map<string, Tool.Info>();
   let failPublication = false;
   let sessionLookups = 0;
@@ -238,12 +229,18 @@ const setupTestPlugin = async function setupTestPlugin(
 
   const location = Location.Info.make({
     directory: absolute,
+    workspaceID:
+      workspace === "remote"
+        ? Schema.String.pipe(Schema.brand("Workspace.ID")).make("wrk_remote")
+        : undefined,
     project: {
       id: Schema.String.pipe(Schema.brand("Project.ID")).make("test-project"),
       directory: absolute,
       canonical: absolute,
     },
   });
+
+  let sessionLocation = location;
 
   const toolContext: Tool.Context = {
     sessionID: Schema.String.pipe(Schema.brand("SessionID")).make(
@@ -255,17 +252,6 @@ const setupTestPlugin = async function setupTestPlugin(
     ),
     id: Tool.CallID.make("capture"),
     progress: unused("toolContext.progress"),
-  };
-
-  const events: HookEvents = {
-    "execute.before": { ...toolContext, tool: "shell", input: {} },
-    "execute.after": {
-      ...toolContext,
-      tool: "shell",
-      input: {},
-      status: "completed",
-      result: {},
-    },
   };
 
   const ctx: Plugin.Context = {
@@ -281,7 +267,15 @@ const setupTestPlugin = async function setupTestPlugin(
           return {
             id: toolContext.sessionID,
             projectID: location.project.id,
-            location: { directory: location.directory },
+            location: {
+              directory: sessionLocation.directory,
+              workspaceID:
+                workspace === "mismatch"
+                  ? Schema.String.pipe(Schema.brand("Workspace.ID")).make(
+                      "wrk_remote"
+                    )
+                  : sessionLocation.workspaceID,
+            },
             cost: Schema.Number.pipe(Schema.brand("Money.USD")).make(0),
             tokens: {
               input: 0,
@@ -331,7 +325,8 @@ const setupTestPlugin = async function setupTestPlugin(
         ) => Effect.Effect<void, HookFailures[Name]>
       ) =>
         Effect.sync(() => {
-          hooks.set(name, () => runHook(events[name]));
+          const registered: HookRegistry<Name> = hooks;
+          registered[name] = runHook;
 
           return { dispose: Effect.void };
         }),
@@ -368,7 +363,9 @@ const setupTestPlugin = async function setupTestPlugin(
   teardown.push(close);
   await Effect.runPromise(plugin.effect(ctx).pipe(Scope.provide(scope)));
 
-  const context = async (request: JsonValue = {}) => {
+  const context = async (
+    request: HookEvents["execute.before"]["input"] = {}
+  ) => {
     const definition = tools.get("commit_context");
 
     if (definition === undefined) {
@@ -390,6 +387,15 @@ const setupTestPlugin = async function setupTestPlugin(
     context,
     close,
     stored,
+    moveSession: (target: string) => {
+      sessionLocation = Location.Info.make({
+        project: location.project,
+        workspaceID: location.workspaceID,
+        directory: Schema.String.pipe(Schema.brand("AbsolutePath")).make(
+          target
+        ),
+      });
+    },
     sessionLookups: () => sessionLookups,
     failPublication: () => {
       failPublication = true;
@@ -398,21 +404,22 @@ const setupTestPlugin = async function setupTestPlugin(
       tool: string,
       input: HookEvents["execute.before"]["input"]
     ) => {
-      const hook = hooks.get("execute.before");
+      const hook = hooks["execute.before"];
 
       if (hook !== undefined) {
-        events["execute.before"] = {
-          ...toolContext,
-          tool,
-          input,
-          id: Tool.CallID.make("call"),
-        };
-        await Effect.runPromise(hook());
+        await Effect.runPromise(
+          hook({
+            ...toolContext,
+            tool,
+            input,
+            id: Tool.CallID.make("call"),
+          })
+        );
       }
     },
     prepareCapture: async (
       onPrepared?: () => void,
-      request: JsonValue = {},
+      request: HookEvents["execute.before"]["input"] = {},
       workdir = directory
     ) => {
       const text = await context(request);
@@ -420,28 +427,29 @@ const setupTestPlugin = async function setupTestPlugin(
 
       onPrepared?.();
 
-      const hook = hooks.get("execute.before");
+      const hook = hooks["execute.before"];
 
       if (hook === undefined) {
         throw new Error("Capture admission hook is unavailable");
       }
 
-      events["execute.before"] = {
-        ...toolContext,
-        tool: "shell",
-        input: { command, workdir },
-      };
-      await Effect.runPromise(hook());
+      await Effect.runPromise(
+        hook({
+          ...toolContext,
+          tool: "shell",
+          input: { command, workdir },
+        })
+      );
 
       return command;
     },
     completeCapture: async (
       command: string,
-      metadata?: JsonValue,
+      metadata?: Tool.Result["metadata"],
       result?: Tool.Result,
       id = "capture"
     ) => {
-      const hook = hooks.get("execute.after");
+      const hook = hooks["execute.after"];
 
       if (hook === undefined) {
         throw new Error("Capture completion hook is unavailable");
@@ -455,17 +463,16 @@ const setupTestPlugin = async function setupTestPlugin(
         status: "completed",
         result: result ?? {
           content: [{ type: "text", text: "RECEIPT_OK\n" }],
-          metadata: isRecord(metadata) ? metadata : undefined,
+          metadata,
         },
       };
 
-      events["execute.after"] = event;
-      await Effect.runPromise(hook());
+      await Effect.runPromise(hook(event));
 
       return event.result;
     },
     failCapture: async (command: string, error: Tool.Error) => {
-      const hook = hooks.get("execute.after");
+      const hook = hooks["execute.after"];
 
       if (hook === undefined) {
         throw new Error("Capture completion hook is unavailable");
@@ -479,34 +486,28 @@ const setupTestPlugin = async function setupTestPlugin(
         error,
       };
 
-      events["execute.after"] = event;
-      await Effect.runPromise(hook());
+      await Effect.runPromise(hook(event));
 
       return event.error;
+    },
+    captureRepo: async (
+      request: HookEvents["execute.before"]["input"] = {},
+      workdir = directory
+    ) => {
+      const command = await harness.prepareCapture(undefined, request, workdir);
+
+      runCapture(command, workdir);
+
+      return await harness.completeCapture(command, {
+        status: "completed",
+        exit: 0,
+        truncated: false,
+      });
     },
   };
 
   if (signing !== "missing") {
-    const command = await harness.prepareCapture();
-
-    const env = {
-      ...process.env,
-      GIT_CONFIG_GLOBAL: join(directory, "global-config"),
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_CONFIG_COUNT: "0",
-    };
-
-    const captured = Bun.spawnSync(["bash", "-c", command], {
-      cwd: directory,
-      env,
-    });
-
-    expect(captured.exitCode).toBe(0);
-    await harness.completeCapture(command, {
-      status: "completed",
-      exit: 0,
-      truncated: false,
-    });
+    await harness.captureRepo();
     sessionLookups = 0;
   }
 
@@ -514,23 +515,146 @@ const setupTestPlugin = async function setupTestPlugin(
 };
 
 describe("opencode-commit-guard plugin", () => {
-  test("appends frozen guidance to copied capture content and structured output", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "commit-guard-inline-"));
+  test.each<"remote" | "mismatch">(["remote", "mismatch"])(
+    "rejects %s workspace captures and commits",
+    async (workspace) => {
+      const harness = await setupTestPlugin(
+        {},
+        "missing",
+        import.meta.dir,
+        new Map(),
+        workspace
+      );
+
+      expect(await harness.context()).toContain(
+        "unavailable for remote workspaces"
+      );
+      await expectRejects(
+        harness.executeBefore("shell", {
+          command: "git commit -s -m 'core: Subject'",
+        }),
+        workspace === "remote"
+          ? "Remote workspace"
+          : "Commit target is ambiguous"
+      );
+    }
+  );
+
+  test("accepts undefined optional input fields and canonicalizes symlink workdirs", async () => {
+    const directory = createTempRepo(teardown);
+    const target = join(directory, "sub");
+    const linked = join(directory, "linked");
+
+    mkdirSync(target);
+    symlinkSync(target, linked, "junction");
+    const harness = await setupTestPlugin({}, "missing", directory);
+
+    await harness.captureRepo(
+      { directory: "linked", refresh: undefined },
+      linked
+    );
+    await harness.executeBefore("shell", {
+      command: "git commit -s -m 'core: Symlink'",
+      workdir: "linked",
+      background: undefined,
+    });
+    expect(
+      await harness.context({ workdir: "sub", refresh: undefined })
+    ).toContain("Frozen commit baseline");
+    await expectRejects(
+      harness.executeBefore("shell", {
+        command: "git commit -s -m 'core: Missing'",
+        workdir: "absent",
+      }),
+      "[commit-guard] Cannot access the shell workdir"
+    );
+    await Promise.all(
+      [null, [], { workdir: 1 }, { directory: false }, { refresh: "true" }].map(
+        async (input) => {
+          await expectRejects(harness.context(input), "[commit-guard]");
+        }
+      )
+    );
+  });
+
+  test("discovers subrepositories and remembers explicit targets only outside a repository", async () => {
+    const base = mkdtempSync(join(tmpdir(), "commit-guard-discovery-"));
 
     teardown.push(() => {
-      rmSync(directory, { recursive: true, force: true });
+      rmSync(base, { recursive: true, force: true });
     });
-    expect(Bun.spawnSync(["git", "init", "-q", directory]).exitCode).toBe(0);
-    expect(
-      Bun.spawnSync([
-        "git",
-        "-C",
-        directory,
-        "config",
-        "commit.gpgsign",
-        "true",
-      ]).exitCode
-    ).toBe(0);
+    expect(resolveTargetWorkdir(base).error).toContain(
+      "No Git repository found"
+    );
+    expect(resolveTargetWorkdir(base, "absent").error).toContain(
+      "does not exist"
+    );
+    writeFileSync(join(base, "file"), "");
+    expect(resolveTargetWorkdir(base, "file").error).toContain(
+      "not a directory"
+    );
+    expect(resolveTargetWorkdir(base, ".").error).toContain(
+      "not a Git repository"
+    );
+    const first = createTempRepo(teardown, undefined, base);
+    const harness = await setupTestPlugin({}, "missing", base);
+
+    expect(resolveTargetWorkdir(base).workdir).toBe(first);
+    await harness.captureRepo({ directory: first }, first);
+    const second = createTempRepo(teardown, undefined, base);
+
+    expect(resolveTargetWorkdir(base).error).toContain(
+      "Multiple Git repositories"
+    );
+    expect(await harness.context()).toContain(
+      `Frozen commit baseline for ${first}`
+    );
+    await harness.captureRepo({ workdir: second, refresh: true }, second);
+    harness.moveSession(first);
+    expect(await harness.context()).toContain(
+      `Frozen commit baseline for ${first}`
+    );
+    harness.moveSession(base);
+    expect(await harness.context()).toContain(
+      `Frozen commit baseline for ${first}`
+    );
+  });
+
+  test.each([null, [], false, "options", 1].map((options) => ({ options })))(
+    "rejects non-object configuration: %j",
+    ({ options }) => {
+      expect(() => parseConfig(options)).toThrow("expected an object");
+    }
+  );
+
+  test("normalizes empty allowlists and rejects unknown configuration keys", () => {
+    expect(parseConfig(undefined).allowedScopes).toBeUndefined();
+    expect(parseConfig({ allowedScopes: [] }).allowedScopes).toBeUndefined();
+    expect(parseConfig({ allowedScopes: [" core "] }).allowedScopes).toEqual([
+      "core",
+    ]);
+    const emptyOptions: Record<string, JsonValue> = {};
+
+    Object.setPrototypeOf(emptyOptions, null);
+    expect(parseConfig(emptyOptions).requireScope).toBe(true);
+
+    for (const options of [
+      { typo: true },
+      { allowedScopes: [""] },
+      { allowedScopes: [1] },
+      { maxLineLength: 1.5 },
+      { maxLineLength: Number.NaN },
+    ]) {
+      expect(() => parseConfig(options)).toThrow();
+    }
+
+    expect(() => parseConfig({ typo: true })).toThrow(
+      "Valid options: requireScope, allowedScopes, maxLineLength"
+    );
+  });
+
+  test("appends frozen guidance to copied capture content and structured output", async () => {
+    const directory = createTempRepo(teardown, "true");
 
     const harness = await setupTestPlugin(
       { allowedScopes: ["core"] },
@@ -559,16 +683,12 @@ describe("opencode-commit-guard plugin", () => {
 
     const original = Object.freeze({ content: parts, output, metadata });
 
-    expect(
-      Bun.spawnSync(["bash", "-c", command], { cwd: directory }).exitCode
-    ).toBe(0);
+    runCapture(command, directory);
     const result = await harness.completeCapture(command, metadata, original);
 
-    expect(
-      harness.executeBefore("shell", {
-        command: "git commit -s -m 'core: Inline capture'",
-      })
-    ).resolves.toBeUndefined();
+    await harness.executeBefore("shell", {
+      command: "git commit -s -m 'core: Inline capture'",
+    });
     const guidance = await harness.context();
 
     expect(guidance).toContain(
@@ -686,20 +806,22 @@ describe("opencode-commit-guard plugin", () => {
   test("reports a missing baseline before message format and permits help", async () => {
     const harness = await setupTestPlugin({}, "missing");
 
-    expect(
-      harness.executeBefore("shell", { command: "git commit -m bad" })
-    ).rejects.toThrow("No published baseline");
-    expect(
-      harness.executeBefore("shell", { command: "git commit -m bad" })
-    ).rejects.toThrow(
+    await expectRejects(
+      harness.executeBefore("shell", { command: "git commit -m bad" }),
+      "No published baseline"
+    );
+    await expectRejects(
+      harness.executeBefore("shell", { command: "git commit -m bad" }),
       'Commit after the shell result reports "Frozen commit baseline"; otherwise call commit_context again'
     );
 
-    for (const flag of ["--help", "-h"]) {
-      expect(
-        harness.executeBefore("shell", { command: `git commit ${flag}` })
-      ).resolves.toBeUndefined();
-    }
+    await Promise.all(
+      ["--help", "-h"].map(async (flag) => {
+        await harness.executeBefore("shell", {
+          command: `git commit ${flag}`,
+        });
+      })
+    );
   });
 
   test("reports unclaimed, claimed, failed, and reloaded capture status", async () => {
@@ -714,12 +836,13 @@ describe("opencode-commit-guard plugin", () => {
     expect(instructions).toContain(
       'Commit after the shell result reports "Frozen commit baseline"; otherwise call commit_context again'
     );
-    expect(
+    await expectRejects(
       harness.executeBefore("shell", {
         command: `${command} `,
         workdir: import.meta.dir,
-      })
-    ).rejects.toThrow("Pre-execution shell inspection failed");
+      }),
+      "Pre-execution shell inspection failed"
+    );
     expect(await harness.context()).toContain("still pending and unclaimed");
     expect(await harness.context()).toContain(
       'Commit after the shell result reports "Frozen commit baseline"; otherwise call commit_context again'
@@ -731,7 +854,7 @@ describe("opencode-commit-guard plugin", () => {
 
     expect(await harness.context()).toContain("Capture claimed");
     expect(await harness.context()).toContain(
-      'Commit after it reports "Frozen commit baseline"; otherwise call commit_context again'
+      'Commit after the shell result reports "Frozen commit baseline"; otherwise call commit_context again'
     );
     await harness.completeCapture(claimed, {
       status: "completed",
@@ -769,9 +892,7 @@ describe("opencode-commit-guard plugin", () => {
     const harness = await setupTestPlugin({}, "missing");
     const command = await harness.prepareCapture();
 
-    expect(
-      Bun.spawnSync(["bash", "-c", command], { cwd: import.meta.dir }).exitCode
-    ).toBe(0);
+    runCapture(command, import.meta.dir);
     harness.failPublication();
     await harness.completeCapture(command, {
       status: "completed",
@@ -785,12 +906,7 @@ describe("opencode-commit-guard plugin", () => {
 
   test("sweeps abandoned unclaimed artifacts and keeps claimed artifacts", async () => {
     const harness = await setupTestPlugin({}, "missing");
-    const actualNow = Date.now;
-    let clock = actualNow();
-
-    Date.now = () => clock;
-
-    try {
+    await withFakeNow(async (advance) => {
       const instructions = await harness.context();
 
       const artifact = / '(?<artifact>[^']+)' 2>\/dev\/null$/u.exec(
@@ -804,7 +920,7 @@ describe("opencode-commit-guard plugin", () => {
       }
 
       expect(existsSync(artifact)).toBe(true);
-      clock += 21_000;
+      advance(21_000);
       await harness.executeBefore("shell", { command: "git status" });
       expect(existsSync(artifact)).toBe(false);
       expect(await harness.context()).toContain(
@@ -820,12 +936,10 @@ describe("opencode-commit-guard plugin", () => {
         throw new Error("Missing claimed artifact path");
       }
 
-      clock += 60_000;
+      advance(60_000);
       await harness.executeBefore("shell", { command: "git status" });
       expect(existsSync(claimedArtifact)).toBe(true);
-    } finally {
-      Date.now = actualNow;
-    }
+    });
   });
 
   test("stale completion and unload do not invalidate a later baseline", async () => {
@@ -845,11 +959,7 @@ describe("opencode-commit-guard plugin", () => {
           refresh: finish !== "reload",
         });
 
-        const shell = Bun.spawnSync(["bash", "-c", command], {
-          cwd: import.meta.dir,
-        });
-
-        expect(shell.exitCode).toBe(0);
+        runCapture(command, import.meta.dir);
         await current.completeCapture(command, {
           status: "completed",
           exit: 0,
@@ -866,28 +976,11 @@ describe("opencode-commit-guard plugin", () => {
   });
 
   test("explains invalid signing config without issuing capture commands repeatedly", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "commit-guard-config-"));
-
-    teardown.push(() => {
-      rmSync(directory, { recursive: true, force: true });
-    });
-    expect(Bun.spawnSync(["git", "init", "-q", directory]).exitCode).toBe(0);
-    expect(
-      Bun.spawnSync([
-        "git",
-        "-C",
-        directory,
-        "config",
-        "commit.gpgsign",
-        "invalid_bool",
-      ]).exitCode
-    ).toBe(0);
+    const directory = createTempRepo(teardown, "invalid_bool");
     const harness = await setupTestPlugin({}, "missing", directory);
     const command = await harness.prepareCapture();
 
-    expect(
-      Bun.spawnSync(["bash", "-c", command], { cwd: directory }).exitCode
-    ).toBe(0);
+    runCapture(command, directory);
 
     const result = await harness.completeCapture(command, {
       status: "completed",
@@ -908,75 +1001,48 @@ describe("opencode-commit-guard plugin", () => {
       { type: "text", text: "RECEIPT_OK\n" },
       { type: "text", text: message },
     ]);
-    expect(
-      harness.executeBefore("shell", { command: "git commit -m bad" })
-    ).rejects.toThrow("Repeating the capture will not fix it");
+    await expectRejects(
+      harness.executeBefore("shell", { command: "git commit -m bad" }),
+      "Repeating the capture will not fix it"
+    );
   });
 
   test("shares the baseline and refresh across root and subdirectory", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "commit-guard-root-"));
+    const directory = createTempRepo(teardown);
     const subdirectory = join(directory, "sub");
 
-    teardown.push(() => {
-      rmSync(directory, { recursive: true, force: true });
-    });
     mkdirSync(subdirectory);
-    expect(Bun.spawnSync(["git", "init", "-q", directory]).exitCode).toBe(0);
     const harness = await setupTestPlugin({}, "missing", directory);
 
-    const command = await harness.prepareCapture(
-      undefined,
-      { workdir: "sub" },
-      subdirectory
-    );
-
-    expect(
-      Bun.spawnSync(["bash", "-c", command], { cwd: subdirectory }).exitCode
-    ).toBe(0);
-    await harness.completeCapture(command, {
-      status: "completed",
-      exit: 0,
-      truncated: false,
+    await harness.captureRepo({ workdir: "sub" }, subdirectory);
+    await harness.executeBefore("shell", {
+      command: "git commit -s -m 'core: Root'",
+      workdir: directory,
     });
-    expect(
-      harness.executeBefore("shell", {
-        command: "git commit -s -m 'core: Root'",
-        workdir: directory,
-      })
-    ).resolves.toBeUndefined();
     expect(await harness.context({ workdir: "sub" })).toContain(
       "Frozen commit baseline"
     );
     await harness.context({ refresh: true, workdir: directory });
-    expect(
+    await expectRejects(
       harness.executeBefore("shell", {
         command: "git commit -s -m 'core: Sub'",
         workdir: subdirectory,
-      })
-    ).rejects.toThrow("No published baseline");
-    const rootCommand = await harness.prepareCapture();
-
-    expect(
-      Bun.spawnSync(["bash", "-c", rootCommand], { cwd: directory }).exitCode
-    ).toBe(0);
-    await harness.completeCapture(rootCommand, {
-      status: "completed",
-      exit: 0,
-      truncated: false,
+      }),
+      "No published baseline"
+    );
+    await harness.captureRepo();
+    await harness.executeBefore("shell", {
+      command: "git commit -s -m 'core: Sub'",
+      workdir: subdirectory,
     });
-    expect(
-      harness.executeBefore("shell", {
-        command: "git commit -s -m 'core: Sub'",
-        workdir: subdirectory,
-      })
-    ).resolves.toBeUndefined();
     await harness.context({ refresh: true, workdir: "sub" });
-    expect(
+    await expectRejects(
       harness.executeBefore("shell", {
         command: "git commit -s -m 'core: Root'",
         workdir: directory,
-      })
-    ).rejects.toThrow("No published baseline");
+      }),
+      "No published baseline"
+    );
   });
 
   test("rejects impossible allowed scopes during configuration", () => {
@@ -1001,22 +1067,16 @@ describe("opencode-commit-guard plugin", () => {
   });
   test("allows non-shell tools without interception", async () => {
     const harness = await setupTestPlugin();
-    expect(
-      harness.executeBefore("write", {
-        path: "file.txt",
-        content: "git commit invalid",
-      })
-    ).resolves.toBeUndefined();
+    await harness.executeBefore("write", {
+      path: "file.txt",
+      content: "git commit invalid",
+    });
   });
 
   test("allows shell commands that do not contain git commit", async () => {
     const harness = await setupTestPlugin();
-    expect(
-      harness.executeBefore("shell", { command: "git status" })
-    ).resolves.toBeUndefined();
-    expect(
-      harness.executeBefore("bash", { command: "bun test && git log -5" })
-    ).resolves.toBeUndefined();
+    await harness.executeBefore("shell", { command: "git status" });
+    await harness.executeBefore("bash", { command: "bun test && git log -5" });
     expect(harness.sessionLookups()).toBe(0);
     await harness.executeBefore("shell", { command: "git commit --help" });
     expect(harness.sessionLookups()).toBe(0);
@@ -1028,22 +1088,18 @@ describe("opencode-commit-guard plugin", () => {
 
   test("allows conforming git commit commands", async () => {
     const harness = await setupTestPlugin();
-    expect(
-      harness.executeBefore("shell", {
-        command: 'git commit -s -m "kernel: add support for foo"',
-      })
-    ).resolves.toBeUndefined();
-    expect(
-      harness.executeBefore("bash", {
-        command: 'git commit -sm "feat(parser): add subshell support"',
-      })
-    ).resolves.toBeUndefined();
+    await harness.executeBefore("shell", {
+      command: 'git commit -s -m "kernel: add support for foo"',
+    });
+    await harness.executeBefore("bash", {
+      command: 'git commit -sm "feat(parser): add subshell support"',
+    });
   });
 
   test("publishes a capture only after a verified foreground exit", async () => {
     const accepted = { status: "completed", exit: 0, truncated: false };
 
-    const cases: (JsonValue | undefined)[] = [
+    const cases: (Tool.Result["metadata"] | undefined)[] = [
       undefined,
       {},
       { status: "running", shellID: "sh_background", truncated: false },
@@ -1060,60 +1116,40 @@ describe("opencode-commit-guard plugin", () => {
         const harness = await setupTestPlugin({}, "missing");
         const command = await harness.prepareCapture();
 
-        const shell = Bun.spawnSync(["bash", "-c", command], {
-          cwd: import.meta.dir,
-        });
-
-        expect(shell.exitCode).toBe(0);
-        expect(shell.stdout.toString()).toBe("RECEIPT_OK\n");
+        runCapture(command, import.meta.dir);
         await harness.completeCapture(command, metadata);
 
         const commit = harness.executeBefore("shell", {
           command: 'git commit -s -m "kernel: valid capture"',
         });
 
-        if (metadata === accepted) {
-          expect(commit).resolves.toBeUndefined();
-        } else {
-          expect(commit).rejects.toThrow("Call commit_context");
-        }
+        await (metadata === accepted
+          ? commit
+          : expectRejects(commit, "Call commit_context"));
       })
     );
   });
 
   test("keeps the capture alive when permission approval is slow", async () => {
     const harness = await setupTestPlugin({}, "missing");
-    const actualNow = Date.now;
-    let clock = actualNow();
-
-    Date.now = () => clock;
-
-    try {
+    await withFakeNow(async (advance) => {
       const command = await harness.prepareCapture(() => {
-        clock += 15_000;
+        advance(15_000);
       });
 
-      clock += 30_000;
+      advance(30_000);
 
-      const shell = Bun.spawnSync(["bash", "-c", command], {
-        cwd: import.meta.dir,
-      });
-
-      expect(shell.exitCode).toBe(0);
-      clock += 6000;
+      runCapture(command, import.meta.dir);
+      advance(6000);
       await harness.completeCapture(command, {
         status: "completed",
         exit: 0,
         truncated: false,
       });
-      expect(
-        harness.executeBefore("shell", {
-          command: 'git commit -s -m "kernel: approved capture"',
-        })
-      ).resolves.toBeUndefined();
-    } finally {
-      Date.now = actualNow;
-    }
+      await harness.executeBefore("shell", {
+        command: 'git commit -s -m "kernel: approved capture"',
+      });
+    });
   });
 
   test("rejects a corrupt reference instead of capturing an unborn HEAD", async () => {
@@ -1136,11 +1172,9 @@ describe("opencode-commit-guard plugin", () => {
         exit: 0,
         truncated: false,
       });
-      expect(
-        unborn.executeBefore("shell", {
-          command: 'git commit -s -m "kernel: valid unborn checkout"',
-        })
-      ).resolves.toBeUndefined();
+      await unborn.executeBefore("shell", {
+        command: 'git commit -s -m "kernel: valid unborn checkout"',
+      });
 
       const branch = Bun.spawnSync([
         "git",
@@ -1173,11 +1207,12 @@ describe("opencode-commit-guard plugin", () => {
         truncated: false,
         exit: shell.exitCode,
       });
-      expect(
+      await expectRejects(
         harness.executeBefore("shell", {
           command: 'git commit -s -m "kernel: reject corrupt HEAD"',
-        })
-      ).rejects.toThrow("Call commit_context");
+        }),
+        "Call commit_context"
+      );
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -1185,23 +1220,40 @@ describe("opencode-commit-guard plugin", () => {
 
   test("rejects git commit commands with invalid format before execution", async () => {
     const harness = await setupTestPlugin();
-    expect(
-      harness.executeBefore("shell", {
-        command: "git commit -m bad",
-        workdir: undefined,
-      })
-    ).rejects.toThrow("Cannot inspect non-JSON shell input");
+    await harness.executeBefore("shell", {
+      command: "git status",
+      workdir: undefined,
+    });
 
-    expect(
+    await Promise.all(
+      [
+        null,
+        [],
+        "git status",
+        { command: 1 },
+        { command: "git status", workdir: 1 },
+        { command: "git status", background: "false" },
+      ].map(
+        async (input) =>
+          await expectRejects(
+            harness.executeBefore("shell", input),
+            "[commit-guard]"
+          )
+      )
+    );
+
+    await expectRejects(
       harness.executeBefore("shell", {
         command: 'git commit -m "Missing scope entirely" -s',
-      })
-    ).rejects.toThrow("Missing scope in subject line");
-    expect(
+      }),
+      "Missing scope in subject line"
+    );
+    await expectRejects(
       harness.executeBefore("shell", {
         command: 'git com""mit -m "Missing scope entirely" -s',
-      })
-    ).rejects.toThrow("Missing scope in subject line");
+      }),
+      "Missing scope in subject line"
+    );
   });
 
   test("settles parallel validation failures as independent tool errors", async () => {
@@ -1244,11 +1296,12 @@ describe("opencode-commit-guard plugin", () => {
 
   test("rejects git commit commands missing signoff flag or trailer", async () => {
     const harness = await setupTestPlugin();
-    expect(
+    await expectRejects(
       harness.executeBefore("shell", {
         command: 'git commit -m "kernel: fix race condition"',
-      })
-    ).rejects.toThrow("Missing commit signoff");
+      }),
+      "Missing commit signoff"
+    );
   });
 
   test("respects allowedScopes option", async () => {
@@ -1256,17 +1309,16 @@ describe("opencode-commit-guard plugin", () => {
       allowedScopes: ["kernel", "releasetools"],
     });
 
-    expect(
-      harness.executeBefore("shell", {
-        command: 'git commit -s -m "kernel: fix race"',
-      })
-    ).resolves.toBeUndefined();
+    await harness.executeBefore("shell", {
+      command: 'git commit -s -m "kernel: fix race"',
+    });
 
-    expect(
+    await expectRejects(
       harness.executeBefore("shell", {
         command: 'git commit -s -m "ui: update colors"',
-      })
-    ).rejects.toThrow('Scope "ui" is not in the allowed scopes list');
+      }),
+      'Scope "ui" is not in the allowed scopes list'
+    );
   });
 
   test("respects maxLineLength option override", async () => {
@@ -1275,34 +1327,32 @@ describe("opencode-commit-guard plugin", () => {
     });
 
     const eightyChars = `kernel: ${"a".repeat(75)}`;
-    expect(
-      harness.executeBefore("shell", {
-        command: `git commit -s -m "${eightyChars}"`,
-      })
-    ).resolves.toBeUndefined();
+    await harness.executeBefore("shell", {
+      command: `git commit -s -m "${eightyChars}"`,
+    });
   });
 
   test("does not require signoff when effective commit.gpgsign is false", async () => {
     const harness = await setupTestPlugin({}, "false");
 
-    expect(
-      harness.executeBefore("shell", {
-        command: 'git commit -m "kernel: add foo without signoff"',
-      })
-    ).resolves.toBeUndefined();
+    await harness.executeBefore("shell", {
+      command: 'git commit -m "kernel: add foo without signoff"',
+    });
 
-    expect(
+    await expectRejects(
       harness.executeBefore("shell", {
         command: 'git -C elsewhere commit -m "kernel: wrong target"',
-      })
-    ).rejects.toThrow("Commit target is ambiguous");
+      }),
+      "Commit target is ambiguous"
+    );
 
-    expect(
+    await expectRejects(
       harness.executeBefore("shell", {
         command:
           "export GIT_DIR=/other/.git; git commit -m 'kernel: wrong target'",
-      })
-    ).rejects.toThrow("Commit target is ambiguous");
+      }),
+      "Commit target is ambiguous"
+    );
   });
 
   test("respects requireScope: false option override", async () => {
@@ -1310,24 +1360,26 @@ describe("opencode-commit-guard plugin", () => {
       requireScope: false,
     });
 
-    expect(
-      harness.executeBefore("shell", {
-        command: 'git commit -s -m "Freeform commit title without scope"',
-      })
-    ).resolves.toBeUndefined();
+    await harness.executeBefore("shell", {
+      command: 'git commit -s -m "Freeform commit title without scope"',
+    });
   });
 
-  test("validates configuration options on setup", () => {
-    expect(setupTestPlugin({ requireScope: "invalid" })).rejects.toThrow(
+  test("validates configuration options on setup", async () => {
+    await expectRejects(
+      setupTestPlugin({ requireScope: "invalid" }),
       "Invalid plugin option requireScope; expected a boolean."
     );
-    expect(setupTestPlugin({ allowedScopes: "not-an-array" })).rejects.toThrow(
+    await expectRejects(
+      setupTestPlugin({ allowedScopes: "not-an-array" }),
       "Invalid plugin option allowedScopes; expected an array of non-empty strings."
     );
-    expect(setupTestPlugin({ maxLineLength: -5 })).rejects.toThrow(
+    await expectRejects(
+      setupTestPlugin({ maxLineLength: -5 }),
       "Invalid plugin option maxLineLength; expected an integer greater than or equal to 0."
     );
-    expect(setupTestPlugin({ requireSignoff: true })).rejects.toThrow(
+    await expectRejects(
+      setupTestPlugin({ requireSignoff: true }),
       "Plugin option requireSignoff has been removed"
     );
   });

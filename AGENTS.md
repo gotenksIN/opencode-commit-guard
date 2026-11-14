@@ -22,7 +22,7 @@ Require shell tool-result metadata proving `status: "completed"`, `exit: 0`, and
 - Do not use `typeof` checks in source or test code; use explicit type guards and `Object.prototype.toString.call`.
 - Do not use the substring "shape" in any symbol name.
 - Annotate every TypeScript type assertion with a preceding `// SAFETY:` justification comment.
-- Reject invalid tool invocations before execution by throwing an Error from the `execute.before` hook.
+- Reject invalid tool invocations through `Effect.fail(new Tool.Error(...))` from the `execute.before` hook.
 - Return structured, actionable error messages detailing the exact rule violations and examples of conforming git commit commands.
 
 ## Test contracts

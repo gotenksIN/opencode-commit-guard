@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import type { Plugin } from "@opencode/plugin/effect";
 
 import { scopePattern } from "./scope.js";
 import {
@@ -10,9 +10,9 @@ import {
 } from "./types.js";
 import type { CommitGuardConfig, JsonValue } from "./types.js";
 
-export const parseConfig = function parseConfig(
-  options: JsonValue | undefined
-): CommitGuardConfig {
+export const parseConfig = (
+  options: Plugin.Context["options"] | JsonValue | undefined
+): CommitGuardConfig => {
   if (options === undefined) {
     return defaultConfig;
   }
@@ -21,26 +21,48 @@ export const parseConfig = function parseConfig(
     throw new Error("Invalid plugin options; expected an object.");
   }
 
-  const rawRequireScope = options.requireScope;
-  let { requireScope } = defaultConfig;
-
-  if (rawRequireScope !== undefined) {
-    if (!isJSONBoolean(rawRequireScope)) {
-      throw new Error(
-        "Invalid plugin option requireScope; expected a boolean."
-      );
-    }
-
-    requireScope = rawRequireScope;
+  if (options.requireSignoff !== undefined) {
+    throw new Error(
+      "Plugin option requireSignoff has been removed; signoff follows the captured effective commit.gpgsign value. Valid options: requireScope, allowedScopes, maxLineLength."
+    );
   }
 
-  const rawAllowedScopes = options.allowedScopes;
+  const validOptions = ["requireScope", "allowedScopes", "maxLineLength"];
 
-  let allowedScopes: readonly string[] | undefined =
-    defaultConfig.allowedScopes;
+  const unknownKeys = Object.keys(options).filter(
+    (key) => !validOptions.includes(key)
+  );
 
-  if (rawAllowedScopes !== undefined) {
-    if (!Schema.is(Schema.Array(Schema.Json))(rawAllowedScopes)) {
+  if (unknownKeys.length > 0) {
+    throw new Error(
+      `Unrecognized plugin options: ${unknownKeys.join(", ")}. Valid options: ${validOptions.join(", ")}.`
+    );
+  }
+
+  const {
+    requireScope = defaultConfig.requireScope,
+    maxLineLength = defaultConfig.maxLineLength,
+    allowedScopes: rawScopes,
+  } = options;
+
+  if (!isJSONBoolean(requireScope)) {
+    throw new Error("Invalid plugin option requireScope; expected a boolean.");
+  }
+
+  if (
+    !isJSONNumber(maxLineLength) ||
+    !Number.isSafeInteger(maxLineLength) ||
+    maxLineLength < 0
+  ) {
+    throw new Error(
+      "Invalid plugin option maxLineLength; expected an integer greater than or equal to 0."
+    );
+  }
+
+  let allowedScopes: string[] | undefined;
+
+  if (rawScopes !== undefined) {
+    if (!Array.isArray(rawScopes)) {
       throw new TypeError(
         "Invalid plugin option allowedScopes; expected an array of non-empty strings."
       );
@@ -48,47 +70,25 @@ export const parseConfig = function parseConfig(
 
     const scopes: string[] = [];
 
-    for (const item of rawAllowedScopes) {
+    for (const item of rawScopes) {
       if (!isJSONString(item) || item.trim().length === 0) {
         throw new Error(
           "Invalid plugin option allowedScopes; expected an array of non-empty strings."
         );
       }
 
-      if (scopePattern.exec(`${item.trim()}: Subject`)?.[1] !== item.trim()) {
+      const trimmed = item.trim();
+
+      if (scopePattern.exec(`${trimmed}: Subject`)?.[1] !== trimmed) {
         throw new Error(
           `Invalid plugin option allowedScopes; scope ${JSON.stringify(item)} cannot match the commit scope syntax.`
         );
       }
 
-      scopes.push(item.trim());
+      scopes.push(trimmed);
     }
 
     allowedScopes = scopes.length > 0 ? scopes : undefined;
-  }
-
-  const rawMaxLineLength = options.maxLineLength;
-  let { maxLineLength } = defaultConfig;
-
-  if (rawMaxLineLength !== undefined) {
-    if (
-      !isJSONNumber(rawMaxLineLength) ||
-      !Number.isSafeInteger(rawMaxLineLength) ||
-      rawMaxLineLength < 0
-    ) {
-      throw new Error(
-        "Invalid plugin option maxLineLength; expected an integer greater than or equal to 0."
-      );
-    }
-
-    // SAFETY: isJSONNumber and Number.isSafeInteger verify rawMaxLineLength is an integer number.
-    maxLineLength = rawMaxLineLength;
-  }
-
-  if (options.requireSignoff !== undefined) {
-    throw new Error(
-      "Plugin option requireSignoff has been removed; signoff follows the captured effective commit.gpgsign value."
-    );
   }
 
   return {

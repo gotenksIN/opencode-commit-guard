@@ -14,15 +14,20 @@ export interface CommitGuardConfig {
   readonly requireScope: boolean;
   readonly allowedScopes?: readonly string[];
   readonly maxLineLength: number;
+  readonly enforceSignoff: boolean;
 }
 ```
 
 - `requireScope`: Enforces that the commit subject begins with `<scope>: <subject>`. Defaults to `true`.
 - `allowedScopes`: Optional list of valid scope names. When defined, the extracted scope must match an item in this list. Defaults to `undefined`.
+  An empty array normalizes to `undefined` and disables allowlist checks.
 - `maxLineLength`: Maximum allowed line length across subject and body lines. Defaults to `72`. Setting this to `0` disables length checks.
 - Signoff applies only when a verified baseline records effective `commit.gpgsign=true`.
   A missing, failed, or stale baseline blocks the commit.
 - `parseConfig` rejects allowed-scope entries that cannot match the validator's shared scope pattern.
+- `parseConfig` rejects unknown option keys and lists the valid options: `requireScope`, `allowedScopes`, and `maxLineLength`.
+- `enforceSignoff` is internal policy, not a plugin option.
+  Validation derives it from the captured signing baseline.
 
 ### Commit invocation
 
@@ -34,8 +39,12 @@ export interface GitCommitInvocation {
   readonly stdinError?: string;
   readonly hasSignoffFlag: boolean;
   readonly isAmend: boolean;
+  readonly hasNoEdit?: boolean;
+  readonly isFixup?: boolean;
   readonly isHelp: boolean;
   readonly targetError?: string;
+  readonly messageExpansion?: boolean;
+  readonly hasTrailer?: boolean;
 }
 ```
 
@@ -43,21 +52,11 @@ export interface GitCommitInvocation {
 - `filePaths`: Message files referenced via `-F` or `--file`.
 - `hasSignoffFlag`: `true` when `-s` or `--signoff` was passed; `false` when omitted or explicitly overridden by `--no-signoff`.
 - `isAmend`: `true` when `--amend` was passed.
+- `hasNoEdit` and `isFixup`: Identify unchanged amendments and generated fixup messages.
+- `messageExpansion` and `hasTrailer`: Identify message expansion and `--trailer` input that validation rejects.
 - `isHelp`: `true` when `-h` or `--help` was passed.
 - `targetError`: Describes a directory or Git configuration override that prevents reliable target matching.
 - `stdinMessage` and `stdinError`: Hold a validated quoted heredoc body or an actionable stdin-input rejection.
-
-### Diagnostics
-
-```ts
-export interface OverlongLine {
-  readonly lineNumber: number;
-  readonly length: number;
-  readonly text: string;
-}
-```
-
-- `OverlongLine`: Records a specific line that exceeded `maxLineLength`, along with its line number and character count.
 
 ## Shell command decomposition
 
@@ -160,7 +159,8 @@ The validation engine (`src/validator.ts`) enforces commit format invariants.
    - Evaluates every line in the assembled commit text against the maximum line length (default 72).
    - Records each overlong line with its 1-based index and character count.
 4. **Signoff (captured `commit.gpgsign`)**:
-   - Satisfied if `hasSignoffFlag` is true or if any line in the message body matches `/^\s*Signed-off-by:\s+[^<>\r\n]+\s+<[^<>\r\n@]+@[^<>\r\n@]+>\s*$/i`.
+   - Satisfied if `hasSignoffFlag` is true or if a message-body line contains a valid `Signed-off-by: Name <email>` trailer.
+     The trailer label matches ASCII upper- and lowercase letters only.
 
 ### 3. Error construction
 
@@ -212,7 +212,7 @@ The importer requires the observed successful metadata combination, rejects unre
 It also validates bounded artifact framing, ownership, size, and a final end sentinel through that descriptor.
 An unclaimed attempt has a 20-second admission deadline.
 Once `execute.before` claims it, permission approval and execution do not expire the attempt.
-The host calls `create.before` before permission approval, not after it.
+The host calls `execute.before` before permission approval, not after it.
 The shell command's process timeout and verified result metadata bound execution.
 POSIX capture uses Bash job-control process groups and a portable 15-second watchdog, while retaining `ulimit -f 256`.
 It encodes fields with `base64 | tr -d '\r\n'` rather than GNU-specific options.

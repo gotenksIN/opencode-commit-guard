@@ -110,6 +110,9 @@ The plugin rejects subject lines that omit the colon, leave the scope empty, or 
 ### 2. Allowed scopes (`allowedScopes`)
 
 When `allowedScopes` contains values, the extracted scope must match an entry in the list.
+Set `allowedScopes: []` to disable the scope allowlist.
+The plugin normalizes the empty array to `undefined`.
+The plugin rejects unknown option keys and lists the valid options: `requireScope`, `allowedScopes`, and `maxLineLength`.
 For conventional commits such as `feat(parser): ...`, the plugin accepts either the inner scope (`parser`), the full scope token (`feat(parser)`), or the type prefix (`feat`).
 Each configured entry must match the scope syntax; spaces and characters such as `@` are invalid.
 

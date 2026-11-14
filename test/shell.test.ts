@@ -2,7 +2,28 @@ import { describe, expect, test } from "bun:test";
 
 import { extractGitCommits } from "../src/shell.js";
 import { defaultConfig } from "../src/types.js";
+import type { GitCommitInvocation } from "../src/types.js";
 import { validateGitCommits } from "../src/validator.js";
+
+const expectSingleCommit = (
+  command: string,
+  expected: Partial<GitCommitInvocation>
+): GitCommitInvocation => {
+  const commits = extractGitCommits(command);
+  expect(commits).toHaveLength(1);
+  const [commit] = commits;
+
+  if (commit === undefined) {
+    throw new Error("Missing commit");
+  }
+
+  expect(commit).toMatchObject(expected);
+
+  return commit;
+};
+
+const parseMessages = (command: string): readonly string[] =>
+  expectSingleCommit(command, {}).messages;
 
 describe("shell parsing through commit extraction", () => {
   test("decodes Bash ANSI-C escapes and preserves unknown escapes", () => {
@@ -26,79 +47,37 @@ describe("shell parsing through commit extraction", () => {
         ?.messages
     ).toEqual(["core: Subject"]);
   });
-  test("tokenizes simple commands with whitespace", () => {
-    expect(extractGitCommits("git commit -m 'first commit' -s")).toMatchObject([
-      { messages: ["first commit"], hasSignoffFlag: true },
-    ]);
-  });
-
-  test("handles single and double quotes with spaces", () => {
-    expect(
-      extractGitCommits('git commit -m "kernel: add support for foo" --signoff')
-    ).toMatchObject([
-      { messages: ["kernel: add support for foo"], hasSignoffFlag: true },
-    ]);
-  });
-
-  test("handles escaped quotes inside double quotes", () => {
-    expect(
-      extractGitCommits(
-        'git commit -m "parser: support \\"quoted\\" values" -s'
-      )
-    ).toMatchObject([
-      { messages: ['parser: support "quoted" values'], hasSignoffFlag: true },
-    ]);
-  });
-
-  test("handles line continuations with backslash newline", () => {
-    expect(
-      extractGitCommits("git commit \\\n  -m 'kernel: fix' \\\n  -s")
-    ).toMatchObject([{ messages: ["kernel: fix"], hasSignoffFlag: true }]);
-  });
-
-  test("discards line continuations inside double quotes", () => {
-    expect(
-      extractGitCommits('git commit -m "kernel: fix \\\nrace" -s')
-    ).toMatchObject([{ messages: ["kernel: fix race"], hasSignoffFlag: true }]);
-  });
-
-  test("handles chained operators and subshells", () => {
-    expect(
-      extractGitCommits(
-        "(cd repo && git commit -m 'docs: update' -s) || echo failed"
-      )
-    ).toMatchObject([
-      {
-        messages: ["docs: update"],
+  test.each([
+    ["git commit -m 'first commit' -s", "first commit"],
+    [
+      'git commit -m "kernel: add support for foo" --signoff',
+      "kernel: add support for foo",
+    ],
+    [
+      'git commit -m "parser: support \\"quoted\\" values" -s',
+      'parser: support "quoted" values',
+    ],
+    ["git commit \\\n  -m 'kernel: fix' \\\n  -s", "kernel: fix"],
+    ['git commit -m "kernel: fix \\\nrace" -s', "kernel: fix race"],
+    [
+      "(cd repo && git commit -m 'docs: update' -s) || echo failed",
+      "docs: update",
+    ],
+    [
+      'git commit -m "scope: handle foo && bar; test || check" -s',
+      "scope: handle foo && bar; test || check",
+    ],
+    ["git commit -m 'scope: fix' -s > /dev/null 2>&1", "scope: fix"],
+    ['git commit --message="kernel: add foo" -s', "kernel: add foo"],
+  ])(
+    "preserves quoted words, operators, continuations, and redirects: %s",
+    (command, message) => {
+      expectSingleCommit(command, {
+        messages: [message],
         hasSignoffFlag: true,
-      },
-    ]);
-  });
-
-  test("preserves control operators inside quotes without splitting", () => {
-    expect(
-      extractGitCommits(
-        'git commit -m "scope: handle foo && bar; test || check" -s'
-      )
-    ).toMatchObject([
-      {
-        messages: ["scope: handle foo && bar; test || check"],
-        hasSignoffFlag: true,
-      },
-    ]);
-  });
-
-  test("handles redirects and file descriptors", () => {
-    expect(
-      extractGitCommits("git commit -m 'scope: fix' -s > /dev/null 2>&1")
-    ).toMatchObject([{ messages: ["scope: fix"], hasSignoffFlag: true }]);
-  });
-
-  test("concatenates adjacent unquoted and quoted tokens", () => {
-    expect(
-      extractGitCommits('git commit --message="kernel: add foo" -s')
-    ).toMatchObject([{ messages: ["kernel: add foo"], hasSignoffFlag: true }]);
-  });
+      });
+    }
+  );
 });
 
 describe("extractGitCommits", () => {
@@ -246,6 +225,24 @@ describe("extractGitCommits", () => {
     ]) {
       expect(extractGitCommits(command)[0]?.messages).toEqual(["bad"]);
     }
+  });
+
+  test.each([
+    '(( 1 << true ))\ngit commit -m "bypass"\ntrue',
+    'echo "$( (( 1 << true ))\ngit commit -m "bypass"\ntrue )"',
+    'for (( i=0; i<1; i+=1<<true )); do\ngit commit -m "bypass"\ndone\ntrue',
+    'echo "$(for (( i=0; i<1; i+=1<<true )); do\ngit commit -m "bypass"\ndone\ntrue)"',
+  ])("does not hide commits after arithmetic left shifts: %s", (command) => {
+    expect(parseMessages(command)).toEqual(["bypass"]);
+  });
+
+  test.each([
+    "cat <<\ngit commit -m bad",
+    "cat <<",
+    "cat <<EOF",
+    "cat <<EOF\nbody",
+  ])("rejects dangling top-level heredocs: %s", (command) => {
+    expect(() => extractGitCommits(command)).toThrow("incomplete heredoc");
   });
 
   test("bounds substitution recursion through heredoc delimiters", () => {
@@ -727,188 +724,112 @@ describe("extractGitCommits", () => {
       }
     }
   });
-  test("extracts standard git commit with -m and -s flags", () => {
-    const invocations = extractGitCommits(
-      "git commit -m 'kernel: fix race' -s"
-    );
-
-    expect(invocations).toHaveLength(1);
-    const [first] = invocations;
-    expect(first?.messages).toEqual(["kernel: fix race"]);
-    expect(first?.hasSignoffFlag).toBe(true);
-    expect(first?.isAmend).toBe(false);
+  test.each<[string, Partial<GitCommitInvocation>]>([
+    [
+      "git commit -m 'kernel: fix race' -s",
+      { messages: ["kernel: fix race"], hasSignoffFlag: true, isAmend: false },
+    ],
+    [
+      'git commit -sm "kernel: fix deadlock"',
+      { messages: ["kernel: fix deadlock"], hasSignoffFlag: true },
+    ],
+    [
+      'git commit -sam "kernel: fix race"',
+      { messages: ["kernel: fix race"], hasSignoffFlag: true },
+    ],
+    [
+      'git commit -sm"kernel: fix adjacent" -a',
+      { messages: ["kernel: fix adjacent"], hasSignoffFlag: true },
+    ],
+    [
+      'git commit -m "kernel: add foo" -m "Body paragraph 1" -m "Signed-off-by: Dev <dev@example.com>"',
+      {
+        messages: [
+          "kernel: add foo",
+          "Body paragraph 1",
+          "Signed-off-by: Dev <dev@example.com>",
+        ],
+        hasSignoffFlag: false,
+      },
+    ],
+    [
+      'git commit --signoff --message="releasetools: fix ota"',
+      { messages: ["releasetools: fix ota"], hasSignoffFlag: true },
+    ],
+    [
+      "git commit -F commit_msg.txt -s",
+      { filePaths: ["commit_msg.txt"], hasSignoffFlag: true },
+    ],
+    [
+      "git commit --file=/tmp/msg.txt --signoff",
+      { filePaths: ["/tmp/msg.txt"] },
+    ],
+    [
+      "git commit --amend --no-edit",
+      { isAmend: true, hasNoEdit: true, messages: [] },
+    ],
+    [
+      'git commit --amend -m "kernel: amended msg" -s',
+      { isAmend: true, messages: ["kernel: amended msg"] },
+    ],
+    ["git commit --fixup HEAD~2", { isFixup: true }],
+    ["git commit --fixup=abc123", { isFixup: true }],
+    ["git commit --fixup=amend:def456", { isFixup: true }],
+    [
+      'git commit --squash HEAD~3 -m "squash! scope: msg" -s',
+      { messages: ["squash! scope: msg"], hasSignoffFlag: true },
+    ],
+    [
+      'git commit --squash=def456 -m "squash! scope: msg" -s',
+      { messages: ["squash! scope: msg"], hasSignoffFlag: true },
+    ],
+    [
+      'git commit --author="Dev <dev@example.com>" --cleanup=strip --fixup=HEAD -s',
+      { isFixup: true, hasSignoffFlag: true },
+    ],
+    [
+      'GIT_AUTHOR_NAME="Alice" git commit -m "build: fix" -s',
+      { messages: ["build: fix"], hasSignoffFlag: true },
+    ],
+    ['env VAR=1 git commit -m "build: fix" -s', { messages: ["build: fix"] }],
+    [
+      'git -C /path/to/repo commit -m "fs: fix leak" -s',
+      { messages: ["fs: fix leak"] },
+    ],
+    [
+      'git --git-dir=/repo/.git --work-tree=/repo commit -m "fs: fix leak" -s',
+      { messages: ["fs: fix leak"] },
+    ],
+    [
+      "git --git-dir .git --work-tree . commit --amend --no-edit",
+      { isAmend: true },
+    ],
+    [
+      'git commit -m "ui: update layout" -s -- src/index.ts',
+      { messages: ["ui: update layout"], hasSignoffFlag: true },
+    ],
+    ["git commit --help", { isHelp: true }],
+    [
+      'git commit -m "kernel: fix" # --help -s',
+      { isHelp: false, hasSignoffFlag: false },
+    ],
+    [
+      'echo "$(printf %s foo\\ #bar)"; git commit -m bad',
+      { messages: ["bad"] },
+    ],
+  ])("extracts flags, wrappers, and subcommands: %s", (command, expected) => {
+    expectSingleCommit(command, expected);
   });
 
-  test("extracts combined short flags like -sm and -sam", () => {
-    const invocations = extractGitCommits(
-      'git commit -sm "kernel: fix deadlock"'
-    );
-
-    expect(invocations).toHaveLength(1);
-    const [first] = invocations;
-    expect(first?.messages).toEqual(["kernel: fix deadlock"]);
-    expect(first?.hasSignoffFlag).toBe(true);
-
-    const sam = extractGitCommits('git commit -sam "kernel: fix race"');
-    expect(sam).toHaveLength(1);
-    expect(sam[0]?.messages).toEqual(["kernel: fix race"]);
-    expect(sam[0]?.hasSignoffFlag).toBe(true);
-  });
-
-  test("extracts combined short flag with adjacent message string", () => {
-    const invocations = extractGitCommits(
-      'git commit -sm"kernel: fix adjacent" -a'
-    );
-
-    expect(invocations).toHaveLength(1);
-    expect(invocations[0]?.messages).toEqual(["kernel: fix adjacent"]);
-    expect(invocations[0]?.hasSignoffFlag).toBe(true);
-  });
-
-  test("extracts multiple -m flags in order", () => {
-    const invocations = extractGitCommits(
-      'git commit -m "kernel: add foo" -m "Body paragraph 1" -m "Signed-off-by: Dev <dev@example.com>"'
-    );
-
-    expect(invocations).toHaveLength(1);
-    expect(invocations[0]?.messages).toEqual([
-      "kernel: add foo",
-      "Body paragraph 1",
-      "Signed-off-by: Dev <dev@example.com>",
-    ]);
-    expect(invocations[0]?.hasSignoffFlag).toBe(false);
-  });
-
-  test("extracts long options --message and --signoff", () => {
-    const invocations = extractGitCommits(
-      'git commit --signoff --message="releasetools: fix ota"'
-    );
-
-    expect(invocations).toHaveLength(1);
-    expect(invocations[0]?.messages).toEqual(["releasetools: fix ota"]);
-    expect(invocations[0]?.hasSignoffFlag).toBe(true);
-  });
-
-  test("extracts -F and --file options", () => {
-    const invocations = extractGitCommits("git commit -F commit_msg.txt -s");
-    expect(invocations).toHaveLength(1);
-    expect(invocations[0]?.filePaths).toEqual(["commit_msg.txt"]);
-    expect(invocations[0]?.hasSignoffFlag).toBe(true);
-
-    const longOpt = extractGitCommits(
-      "git commit --file=/tmp/msg.txt --signoff"
-    );
-
-    expect(longOpt).toHaveLength(1);
-    expect(longOpt[0]?.filePaths).toEqual(["/tmp/msg.txt"]);
-  });
-
-  test("extracts amend commits", () => {
-    const amendNoEdit = extractGitCommits("git commit --amend --no-edit");
-    expect(amendNoEdit).toHaveLength(1);
-    expect(amendNoEdit[0]?.isAmend).toBe(true);
-    expect(amendNoEdit[0]?.hasNoEdit).toBe(true);
-    expect(amendNoEdit[0]?.messages).toHaveLength(0);
-
-    const amendWithMessage = extractGitCommits(
-      'git commit --amend -m "kernel: amended msg" -s'
-    );
-
-    expect(amendWithMessage).toHaveLength(1);
-    expect(amendWithMessage[0]?.isAmend).toBe(true);
-    expect(amendWithMessage[0]?.messages).toEqual(["kernel: amended msg"]);
-  });
-
-  test("identifies fixup flag from separate and joined long options", () => {
-    const separate = extractGitCommits("git commit --fixup HEAD~2");
-    expect(separate[0]?.isFixup).toBe(true);
-
-    const joined = extractGitCommits("git commit --fixup=abc123");
-    expect(joined[0]?.isFixup).toBe(true);
-
-    const amend = extractGitCommits("git commit --fixup=amend:def456");
-    expect(amend[0]?.isFixup).toBe(true);
-  });
-
-  test("parses options following separate and joined squash flag", () => {
-    const separate = extractGitCommits(
-      'git commit --squash HEAD~3 -m "squash! scope: msg" -s'
-    );
-
-    expect(separate[0]?.messages).toEqual(["squash! scope: msg"]);
-    expect(separate[0]?.hasSignoffFlag).toBe(true);
-
-    const joined = extractGitCommits(
-      'git commit --squash=def456 -m "squash! scope: msg" -s'
-    );
-
-    expect(joined[0]?.messages).toEqual(["squash! scope: msg"]);
-    expect(joined[0]?.hasSignoffFlag).toBe(true);
-  });
-
-  test("continues parsing flags after long options with joined arguments", () => {
-    const invocations = extractGitCommits(
-      'git commit --author="Dev <dev@example.com>" --cleanup=strip --fixup=HEAD -s'
-    );
-
-    expect(invocations[0]?.isFixup).toBe(true);
-    expect(invocations[0]?.hasSignoffFlag).toBe(true);
-  });
-
-  test("identifies git commit after leading environment variables", () => {
-    const invocations = extractGitCommits(
-      'GIT_AUTHOR_NAME="Alice" git commit -m "build: fix" -s'
-    );
-
-    expect(invocations).toHaveLength(1);
-    expect(invocations[0]?.messages).toEqual(["build: fix"]);
-    expect(invocations[0]?.hasSignoffFlag).toBe(true);
-  });
-
-  test("identifies git commit after command wrappers", () => {
-    const invocations = extractGitCommits(
-      'env VAR=1 git commit -m "build: fix" -s'
-    );
-
-    expect(invocations).toHaveLength(1);
-    expect(invocations[0]?.messages).toEqual(["build: fix"]);
-  });
-
-  test("handles global git flags preceding commit subcommand", () => {
-    const invocations = extractGitCommits(
-      'git -C /path/to/repo commit -m "fs: fix leak" -s'
-    );
-
-    expect(invocations).toHaveLength(1);
-    expect(invocations[0]?.messages).toEqual(["fs: fix leak"]);
-
-    const dirFlag = extractGitCommits(
-      'git --git-dir=/repo/.git --work-tree=/repo commit -m "fs: fix leak" -s'
-    );
-
-    expect(dirFlag).toHaveLength(1);
-    expect(dirFlag[0]?.messages).toEqual(["fs: fix leak"]);
-
-    const separate = extractGitCommits(
-      "git --git-dir .git --work-tree . commit --amend --no-edit"
-    );
-
-    expect(separate).toHaveLength(1);
-    expect(separate[0]?.isAmend).toBe(true);
-  });
-
-  test("ignores non-commit git subcommands", () => {
-    expect(extractGitCommits("git log --grep='commit'")).toHaveLength(0);
-    expect(extractGitCommits("git status")).toHaveLength(0);
-    expect(extractGitCommits("git commit-tree 123456")).toHaveLength(0);
-    expect(extractGitCommits("git diff HEAD~1")).toHaveLength(0);
-  });
-
-  test("ignores commands that mention git commit as argument or string", () => {
-    expect(extractGitCommits('echo "git commit -m \\"test\\""')).toHaveLength(
-      0
-    );
-    expect(extractGitCommits('grep -rn "git commit" .')).toHaveLength(0);
+  test.each([
+    "git log --grep='commit'",
+    "git status",
+    "git commit-tree 123456",
+    "git diff HEAD~1",
+    'echo "git commit -m \\"test\\""',
+    'grep -rn "git commit" .',
+  ])("ignores non-commit commands: %s", (command) => {
+    expect(extractGitCommits(command)).toEqual([]);
   });
 
   test("extracts multiple git commits from chained commands", () => {
@@ -940,40 +861,5 @@ describe("extractGitCommits", () => {
         "preceding directory or environment change"
       );
     }
-  });
-
-  test("handles positional arguments separator --", () => {
-    const invocations = extractGitCommits(
-      'git commit -m "ui: update layout" -s -- src/index.ts'
-    );
-
-    expect(invocations).toHaveLength(1);
-    expect(invocations[0]?.messages).toEqual(["ui: update layout"]);
-    expect(invocations[0]?.hasSignoffFlag).toBe(true);
-  });
-
-  test("handles --help flag", () => {
-    const invocations = extractGitCommits("git commit --help");
-    expect(invocations).toHaveLength(1);
-    expect(invocations[0]?.isHelp).toBe(true);
-  });
-
-  test("does not parse flags inside shell comments", () => {
-    const invocations = extractGitCommits(
-      'git commit -m "kernel: fix" # --help -s'
-    );
-
-    expect(invocations).toHaveLength(1);
-    expect(invocations[0]?.isHelp).toBe(false);
-    expect(invocations[0]?.hasSignoffFlag).toBe(false);
-  });
-
-  test("keeps escaped spaces inside substitution words", () => {
-    const invocations = extractGitCommits(
-      'echo "$(printf %s foo\\ #bar)"; git commit -m bad'
-    );
-
-    expect(invocations).toHaveLength(1);
-    expect(invocations[0]?.messages).toEqual(["bad"]);
   });
 });
