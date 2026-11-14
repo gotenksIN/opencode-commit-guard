@@ -181,7 +181,12 @@ Add -s only when the returned policy or repository instructions require it.`,
     yield* ctx.tool.hook("execute.before", (event) => Effect.gen(function*() {
       yield* sweep()
 
-      const captureSession = event.tool === "shell" || event.tool === "bash"
+      // SAFETY: Tool input is untrusted JSON and is checked before reading its fields.
+      const rawInput = event.input as JsonValue | undefined
+
+      // Only capture commands need session identity before invocation extraction.
+      const captureSession = (event.tool === "shell" || event.tool === "bash") &&
+        [...pending.values()].some((attempt) => isRecord(rawInput) && rawInput["command"] === attempt.command)
         ? yield* ctx.session.get({ sessionID: event.sessionID }) : undefined
 
       const captureSessionDirectory = captureSession?.location.directory ?? ctx.location.directory
@@ -191,9 +196,6 @@ Add -s only when the returned policy or repository instructions require it.`,
           if (event.tool !== "shell" && event.tool !== "bash") {
             return
           }
-
-          // SAFETY: event.input is an unvalidated tool input payload from OpenCode runtime.
-          const rawInput = event.input as JsonValue | undefined
 
           if (!isRecord(rawInput)) {
             return
@@ -249,7 +251,7 @@ Add -s only when the returned policy or repository instructions require it.`,
         message: "[commit-guard] Remote workspace commits cannot use local commit context. Capture from a verified local checkout.",
       }))
 
-      const session = yield* ctx.session.get({ sessionID: event.sessionID })
+      const session = captureSession ?? (yield* ctx.session.get({ sessionID: event.sessionID }))
 
       if (session.location.workspaceID !== ctx.location.workspaceID ||
         parsed.invocations.some((invocation) => invocation.targetError !== undefined)) {
@@ -364,7 +366,7 @@ Add -s only when the returned policy or repository instructions require it.`,
         "Call commit_context with the same workdir for status and next steps."
 
       if (event.status === "error") {
-        event.error = new Tool.Error({ message: `${event.error.message}\n\n${note}` })
+        event.error = new Tool.Error({ ...event.error, message: `${event.error.message}\n\n${note}` })
       } else event.result = appendCaptureNote(event.result, note)
     }))
   }),

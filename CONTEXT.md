@@ -72,7 +72,8 @@ The tokenizer divides the raw command into words, control operators, and redirec
   - Single quotes (`'...'`) preserve all characters literally.
   - Double quotes (`"..."`) decode `\"`, `\\`, `\$`, and `` \` ``, and remove backslash-newline continuations.
     They preserve `\n` literally.
-    Simple `${...}` parameters remain intact; nested quoting, escapes, and expansions inside them fail closed.
+    `${...}` parameters preserve nested quotes, escapes, and parameter defaults without evaluation.
+    Executable `$()` and backtick substitutions inside these parameters fail closed.
   - ANSI-C quotes (`$'...'`) decode Bash control, hexadecimal, Unicode, and octal escapes, and preserve the backslash on unknown escapes.
     A trailing `\c` preserves the closing quote; `\c\\` consumes the escaped backslash operand.
 - Concatenation: Adjacent quoted and unquoted fragments (such as `--message="value"`) combine into a single word token.
@@ -89,6 +90,8 @@ The tokenizer divides the raw command into words, control operators, and redirec
 - Message tokens track unquoted and double-quoted expansions without evaluating them.
 - Unterminated quotes fail closed with the quote kind and the position of the opening quote.
 - Unterminated backtick and `$(` substitutions fail closed with their opening position and instructions to close the substitution or quote literal text.
+- All parser and scanner errors start with `[commit-guard]` and identify pre-execution shell inspection as the failing operation.
+  Non-Git failures give command-neutral guidance; Git-specific retry guidance applies only when committing.
 
 ### 2. Invocation extraction (`extractGitCommits`)
 
@@ -110,15 +113,21 @@ The extraction pipeline identifies git commit commands:
 9. Recursively inspects `$()` and backtick substitutions and literal `bash`, `sh`, and `zsh` `-c` bodies.
    Backticks inside double quotes also remove backslashes that escape double quotes before recursive inspection.
    Literal `sh -c` bodies containing `$'` fail closed because POSIX shells differ in their support for ANSI-C quotes.
-   Substitution boundaries respect ANSI-C quotes and simple double-quoted parameters; `case` patterns and nested quoted parameters fail closed.
+   Substitution boundaries respect ANSI-C quotes and nested double-quoted parameter defaults.
+   Command-position `case` uses nested header, pattern, and branch states so pattern parentheses do not close the substitution.
+   Patterns accept an optional leading `(` and branches accept `;;`, `;&`, and `;;&`.
+   Commits inside case branches remain subject to recursive extraction and validation.
    Substitution boundaries queue `<<` and `<<-` heredocs until the next unquoted newline and skip their bodies through each closing delimiter.
    They use the same delimiter parsing, tab stripping, and unquoted line continuation rules as top-level heredocs.
    Arithmetic expansions and command-position `((...))` expressions keep left shifts separate from heredoc operators.
    Quoted bodies remain literal; unquoted bodies retain recursive `$()` inspection and reject backtick substitutions.
-   Literal `case` arguments remain ordinary words; only command-position `case` syntax is rejected.
+   Literal `case` arguments remain ordinary words.
    Command positions include the literal `time [-p] [--]` prefix.
    Function and `coproc` declarations inside substitutions fail closed because their bodies require compound-command parsing.
-   Bounded recursion and incomplete or dynamic shell bodies fail closed with instructions to run Git directly.
+   Bounded recursion and incomplete or dynamic shell bodies fail closed with instructions to simplify syntax or use a literal body.
+   Expanded `-c` bodies remain rejected, including `bash -c "FOO=$BAR pytest"` and `bash -c "$SCRIPT"`.
+   Expansion can introduce executable words, so parsing the literal source of an expanded body is insufficient.
+   Dynamic command names also fail closed.
 
 ## Validation engine
 
@@ -167,6 +176,8 @@ The plugin (`src/plugin.ts`) wires the validation engine to OpenCode's tool exec
 - Hook: `ctx.tool.hook("execute.before")` with an Effect callback.
 - Checks if `event.tool` is `"shell"` or `"bash"`.
 - Extracts `command` from `event.input`.
+- Looks up the session only for an exact pending capture command or a non-help commit requiring validation.
+  Each pre-execution hook performs at most one session lookup.
 - Does not read repository history or message files before the shell permission check.
 - Runs `extractGitCommits(command)` and validates all found invocations.
 - Loads a checksum-validated, session-and-worktree-scoped signing baseline from plugin storage.
@@ -200,6 +211,13 @@ An unclaimed attempt has a 20-second admission deadline.
 Once `execute.before` claims it, permission approval and execution do not expire the attempt.
 The host calls `create.before` before permission approval, not after it.
 The shell command's process timeout and verified result metadata bound execution.
+POSIX capture uses Bash job-control process groups and a portable 15-second watchdog, while retaining `ulimit -f 256`.
+It encodes fields with `base64 | tr -d '\r\n'` rather than GNU-specific options.
+Windows capture uses an encoded Windows PowerShell command that does not depend on the invoking shell's quoting rules.
+It reads Git stdout as raw bytes, preserves NUL separators, and enforces a shared 15-second deadline and a 256 KiB artifact limit.
+Both paths write LF-delimited `CTX1` fields and `END\n`, then print `RECEIPT_OK`.
+Import requires platform-native absolute paths and compares canonical checkout roots.
+Import checks owner-only mode bits on POSIX, not Windows, while retaining descriptor identity and size checks on both platforms.
 Each context or pre-execution call sweeps up to 32 pending entries and removes expired unclaimed artifacts and descriptors.
 The sweep never removes claimed attempts.
 Git reference failures cannot be inferred to mean detached or unborn HEAD; an unborn HEAD requires a readable symbolic reference and a successful status check.
@@ -216,7 +234,7 @@ The plugin also retains up to 128 failure diagnostics in memory if storage fails
 `RECEIPT_OK` confirms only that the artifact was written, not that the baseline was published.
 The plugin appends one bounded outcome note to claimed capture results, preserving the original content parts and metadata.
 It also appends that note to the structured shell output so Code Mode receives it.
-A failed tool call retains its original error message with the failure note appended.
+A failed tool call retains its original error payload and metadata with the failure note appended to its message.
 The context tool and inline success share identical checkout-root guidance and captured signoff instructions.
 An invalid signing setting produces repair guidance instead of another capture command.
 Inspect its origin, fix the value without changing the intended signing policy, then request `refresh:true`.
@@ -224,6 +242,8 @@ The tool returns only bounded guidance and observed scope examples, never comple
 Refresh the frozen baseline after a branch switch, signing setting change, or changed commit instructions.
 The plugin does not detect configuration changes or repository replacement at the same path without another authorized capture.
 The guard does not verify cryptographic signatures or enforce all writing conventions in `AGENTS.md`.
+The OC-1 proposal to mark `commit_context` with `codemode: false` is deferred and is not implemented.
+Code Mode access retains the same capture admission and publication requirements.
 
 ## Packaging and runtime invariants
 

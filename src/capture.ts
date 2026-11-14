@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto"
 import { closeSync, constants, existsSync, fstatSync, mkdtempSync, openSync, readdirSync, readSync, realpathSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { dirname, join, relative, resolve } from "node:path"
+import { dirname, isAbsolute, join, relative, resolve } from "node:path"
+import { gzipSync } from "node:zlib"
 import type { Plugin } from "@opencode/plugin/effect"
 import { Effect, Semaphore } from "effect"
 import { isJSONString, isRecord } from "./types.js"
@@ -290,13 +291,14 @@ export function load(ctx: Context, scope: string): Effect.Effect<Baseline | unde
 
 // Each line is a base64-encoded Git result. No Git output enters the shell result.
 function captureCommand(path: string): string {
+  if (process.platform === "win32") return windowsCaptureCommand(path)
   const quoted = `'${path.replaceAll("'", "'\\''")}'`
 
-  return `timeout 15s bash -c 'set -euo pipefail
+  const script = `set -euo pipefail
 ulimit -f 256
 out=$1
 printf "CTX1\\n" > "$out"
-field() { "$@" 2>/dev/null | base64 -w0 >> "$out"; printf "\\n" >> "$out"; }
+field() { "$@" 2>/dev/null | base64 | tr -d "\\r\\n" >> "$out"; printf "\\n" >> "$out"; }
 field git rev-parse --show-toplevel
 field git rev-parse --absolute-git-dir
 field git rev-parse --path-format=absolute --git-common-dir
@@ -305,7 +307,105 @@ if git rev-parse --verify HEAD >/dev/null 2>&1; then printf "head\\n" >> "$out";
 if git config --type=bool --get commit.gpgsign >/dev/null 2>&1; then printf "set\\n" >> "$out"; field git config --type=bool --get commit.gpgsign; else status=$?; if [ "$status" -eq 1 ]; then printf "unset\\n\\n" >> "$out"; else printf "error\\n\\n" >> "$out"; fi; fi
 if git config --get user.signingkey >/dev/null 2>&1; then printf "set\\n" >> "$out"; field git config --get user.signingkey; else status=$?; if [ "$status" -eq 1 ]; then printf "unset\\n\\n" >> "$out"; else printf "error\\n\\n" >> "$out"; fi; fi
 printf "END\\n" >> "$out"
-printf "RECEIPT_OK\\n"' bash ${quoted} 2>/dev/null`
+printf "RECEIPT_OK\\n"`
+
+  // Bash job control assigns a process group to the worker, including its Git children.
+  return `bash -c 'set -m
+bash -c "$1" bash "$2" &
+worker=$!
+(
+  sleep 15 &
+  timer=$!
+  trap "kill $timer 2>/dev/null" EXIT
+  trap "exit 0" TERM
+  wait "$timer"
+  kill -KILL -- "-$worker" 2>/dev/null
+) &
+watchdog=$!
+wait "$worker"
+status=$?
+kill "$watchdog" 2>/dev/null
+wait "$watchdog" 2>/dev/null
+exit "$status"' bash '${script.replaceAll("'", "'\\''")}' ${quoted} 2>/dev/null`
+}
+
+function windowsCaptureCommand(path: string): string {
+  // EncodedCommand avoids quoting differences between cmd, PowerShell, and Git Bash.
+  const script = `$ErrorActionPreference = 'Stop'
+$clock = [Diagnostics.Stopwatch]::StartNew()
+$lines = [Collections.Generic.List[string]]::new()
+$lines.Add('CTX1')
+function gitResult([string]$arguments) {
+  $info = [Diagnostics.ProcessStartInfo]::new('git', $arguments)
+  $info.UseShellExecute = $false
+  $info.CreateNoWindow = $true
+  $info.RedirectStandardOutput = $true
+  $info.RedirectStandardError = $true
+  $p = [Diagnostics.Process]::new()
+  $p.StartInfo = $info
+  $memory = [IO.MemoryStream]::new()
+  try {
+    if (!$p.Start()) { throw 'Git did not start' }
+    $p.BeginErrorReadLine()
+    $buffer = [byte[]]::new(4096)
+    while ($true) {
+      $task = $p.StandardOutput.BaseStream.ReadAsync($buffer, 0, $buffer.Length)
+      $remaining = 15000 - [int]$clock.ElapsedMilliseconds
+      if ($remaining -le 0 -or !$task.Wait($remaining)) { throw 'Capture timed out' }
+      $count = $task.Result
+      if ($count -eq 0) { break }
+      if ($memory.Length + $count -gt ${maxBytes}) { throw 'Capture exceeds size limit' }
+      $memory.Write($buffer, 0, $count)
+    }
+    $remaining = 15000 - [int]$clock.ElapsedMilliseconds
+    if ($remaining -le 0 -or !$p.WaitForExit($remaining)) { throw 'Capture timed out' }
+    return @{ Code = $p.ExitCode; Bytes = $memory.ToArray() }
+  } finally {
+    if ($p.Id -and !$p.HasExited) { & taskkill.exe /PID $p.Id /T /F > $null 2>&1 }
+    $p.Dispose()
+    $memory.Dispose()
+  }
+}
+function field([string]$arguments) {
+  $result = gitResult $arguments
+  if ($result.Code -ne 0) { throw 'Git capture failed' }
+  $lines.Add([Convert]::ToBase64String($result.Bytes))
+}
+try {
+  field 'rev-parse --show-toplevel'
+  field 'rev-parse --absolute-git-dir'
+  field 'rev-parse --path-format=absolute --git-common-dir'
+  $branch = gitResult 'symbolic-ref -q --short HEAD'
+  if ($branch.Code -eq 0) { $lines.Add('branch'); $lines.Add([Convert]::ToBase64String($branch.Bytes)) }
+  elseif ($branch.Code -eq 1) { $lines.Add('detached'); $lines.Add('') }
+  else { throw 'Invalid branch' }
+  $head = gitResult 'rev-parse --verify HEAD'
+  if ($head.Code -eq 0) {
+    $lines.Add('head'); $lines.Add([Convert]::ToBase64String($head.Bytes))
+    field 'log -10 -z --format=%B%x00'
+  } elseif ($head.Code -eq 128 -and (gitResult 'symbolic-ref -q HEAD').Code -eq 0 -and (gitResult 'status --porcelain').Code -eq 0) {
+    $lines.Add('unborn'); $lines.Add(''); $lines.Add('')
+  } else { throw 'Invalid HEAD' }
+  foreach ($arguments in @('config --type=bool --get commit.gpgsign', 'config --get user.signingkey')) {
+    $result = gitResult $arguments
+    if ($result.Code -eq 0) { $lines.Add('set'); $lines.Add([Convert]::ToBase64String($result.Bytes)) }
+    elseif ($result.Code -eq 1) { $lines.Add('unset'); $lines.Add('') }
+    else { $lines.Add('error'); $lines.Add('') }
+  }
+  $lines.Add('END')
+  $bytes = [Text.Encoding]::UTF8.GetBytes(($lines -join "\`n") + "\`n")
+  if ($bytes.Length -gt ${maxBytes} -or $clock.ElapsedMilliseconds -ge 15000) { throw 'Capture exceeds limits' }
+  $path = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(path).toString("base64")}'))
+  $file = [IO.FileStream]::new($path, [IO.FileMode]::Truncate, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+  try { $file.Write($bytes, 0, $bytes.Length) } finally { $file.Dispose() }
+  [Console]::Write("RECEIPT_OK\`n")
+} catch { exit 1 }`
+
+  // Compress the script to stay below cmd.exe's 8191-character command limit.
+  const compressed = gzipSync(Buffer.from(script)).toString("base64")
+  const bootstrap = `$m = [IO.MemoryStream]::new([Convert]::FromBase64String('${compressed}')); $g = [IO.Compression.GZipStream]::new($m, [IO.Compression.CompressionMode]::Decompress); $r = [IO.StreamReader]::new($g, [Text.Encoding]::UTF8); try { Invoke-Expression $r.ReadToEnd() } finally { $r.Dispose(); $g.Dispose(); $m.Dispose() }`
+
+  return `powershell -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(bootstrap, "utf16le").toString("base64")}`
 }
 
 export function createPending(scope: string, sessionID: string, agent: string, counterValue: number, workdir: string): Pending {
@@ -343,7 +443,7 @@ export function importCapture(pending: Pending): Baseline {
   const stat = fstatSync(pending.fd)
 
   if (!stat.isFile() || stat.dev !== pending.identity.dev || stat.ino !== pending.identity.ino ||
-    stat.uid !== pending.identity.uid || (stat.mode & 0o777) !== 0o600 || stat.size > maxBytes || stat.size === 0) {
+    stat.uid !== pending.identity.uid || process.platform !== "win32" && (stat.mode & 0o777) !== 0o600 || stat.size > maxBytes || stat.size === 0) {
     throw new Error("Invalid private capture artifact")
   }
 
@@ -358,7 +458,8 @@ export function importCapture(pending: Pending): Baseline {
   const fields = bytes.toString("utf8").split("\n")
 
   if (fields.length !== 15 || fields[0] !== "CTX1" || fields[13] !== "END" || fields[14] !== "") throw new Error("Incomplete capture")
-  const root = decode(fields[1]!).trimEnd()
+  const rawRoot = decode(fields[1]!).trimEnd()
+  const root = isAbsolute(rawRoot) ? realpathSync(resolve(rawRoot)) : rawRoot
   const gitDir = decode(fields[2]!).trimEnd()
   const commonDir = decode(fields[3]!).trimEnd()
   const branch = fields[4] === "branch" ? decode(fields[5]!).trimEnd() : null
@@ -366,7 +467,7 @@ export function importCapture(pending: Pending): Baseline {
   const rawLog = decode(fields[8]!)
   const messages = head === null ? [] : rawLog.split("\0\0").filter((message) => message.length > 0)
 
-  if (!root.startsWith("/") || !gitDir.startsWith("/") || !commonDir.startsWith("/") ||
+  if (!isAbsolute(root) || !isAbsolute(gitDir) || !isAbsolute(commonDir) ||
     root !== findGitRoot(pending.workdir) ||
     !["branch", "detached"].includes(fields[4]!) || !["head", "unborn"].includes(fields[6]!) ||
     (head !== null && !/^[a-f0-9]{40,64}$/.test(head)) ||

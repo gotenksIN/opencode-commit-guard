@@ -29,6 +29,7 @@ async function setupTestPlugin(options: JsonValue = {}, signing: "true" | "false
   const shellHooks = new Map<string, (event: { command: string; cwd: string }) => Effect.Effect<void>>()
   const tools = new Map<string, Tool.Info>()
   let failPublication = false
+  let sessionLookups = 0
 
   const ctx = {
     options,
@@ -37,7 +38,11 @@ async function setupTestPlugin(options: JsonValue = {}, signing: "true" | "false
       project: { id: "test-project" },
     },
     session: {
-      get: () => Effect.succeed({ location: { directory } }),
+      get: () => Effect.sync(() => {
+        sessionLookups++
+
+        return { location: { directory } }
+      }),
     },
     shell: {
       hook: (name: string, callback: (event: { command: string; cwd: string }) => Effect.Effect<void>) => Effect.sync(() => {
@@ -116,6 +121,7 @@ async function setupTestPlugin(options: JsonValue = {}, signing: "true" | "false
     context,
     close,
     stored,
+    sessionLookups: () => sessionLookups,
     failPublication: () => { failPublication = true },
     executeBefore: async (tool: string, input: JsonValue) => {
       const hook = hooks.get("execute.before")
@@ -215,7 +221,7 @@ describe("opencode-commit-guard plugin", () => {
       { type: "file", uri: "file:///receipt", mime: "text/plain" },
     ])
 
-    const output = Object.freeze({ output: "RECEIPT_OK\n", exit: 0, status: "completed" })
+    const output = Object.freeze({ output: "RECEIPT_OK\n", exitCode: 0, wallTimeSeconds: 0.1 })
     const original = Object.freeze({ content: parts, output, metadata })
 
     expect(Bun.spawnSync(["bash", "-c", command], { cwd: directory }).exitCode).toBe(0)
@@ -254,11 +260,15 @@ describe("opencode-commit-guard plugin", () => {
   test("appends capture failure guidance to the original shell error message", async () => {
     const harness = await setupTestPlugin({}, "missing")
     const command = await harness.prepareCapture()
-    const original = new Tool.Error({ message: "Permission denied by user" })
+    const cause = new Error("Underlying shell failure")
+    const metadata = { status: "killed", private: "preserved" }
+    const original = new Tool.Error({ message: "Permission denied by user", error: cause, metadata })
     const error = await harness.failCapture(command, original)
 
     expect(error).toBeInstanceOf(Tool.Error)
     expect(error).not.toBe(original)
+    expect(error.error).toBe(cause)
+    expect(error.metadata).toEqual(original.metadata)
     expect(error.message).toStartWith("Permission denied by user\n\n[commit-guard] This capture did not publish a usable baseline: shell result did not complete successfully.")
     expect(error.message).toContain("RECEIPT_OK alone does not authorize a commit.")
     expect(await harness.context()).toContain("previous capture failed: shell result did not complete successfully")
@@ -305,7 +315,7 @@ describe("opencode-commit-guard plugin", () => {
     expect(instructions).toContain("immediately, unchanged, in the foreground")
     expect(instructions).toContain("Do not wrap it or chain another command onto it.")
     expect(instructions).toContain('Commit after the shell result reports "Frozen commit baseline"; otherwise call commit_context again')
-    await harness.executeBefore("shell", { command: `${command} `, workdir: import.meta.dir })
+    await expect(harness.executeBefore("shell", { command: `${command} `, workdir: import.meta.dir })).rejects.toThrow("Pre-execution shell inspection failed")
     expect(await harness.context()).toContain("still pending and unclaimed")
     expect(await harness.context()).toContain('Commit after the shell result reports "Frozen commit baseline"; otherwise call commit_context again')
     expect(await harness.context()).toContain("RECEIPT_OK confirms only that the artifact was written")
@@ -346,7 +356,7 @@ describe("opencode-commit-guard plugin", () => {
 
     try {
       const instructions = await harness.context()
-      const artifact = instructions.match(/bash '([^']+)' 2>\/dev\/null$/)?.[1]
+      const artifact = instructions.match(/ '([^']+)' 2>\/dev\/null$/)?.[1]
 
       expect(artifact).toBeDefined()
       expect(existsSync(artifact!)).toBe(true)
@@ -355,7 +365,7 @@ describe("opencode-commit-guard plugin", () => {
       expect(existsSync(artifact!)).toBe(false)
       expect(await harness.context()).toContain("previous capture expired before its command was claimed")
       const claimed = await harness.prepareCapture()
-      const claimedArtifact = claimed.match(/bash '([^']+)' 2>\/dev\/null$/)?.[1]
+      const claimedArtifact = claimed.match(/ '([^']+)' 2>\/dev\/null$/)?.[1]
 
       clock += 60000
       await harness.executeBefore("shell", { command: "git status" })
@@ -451,6 +461,11 @@ describe("opencode-commit-guard plugin", () => {
     await expect(
       harness.executeBefore("bash", { command: "bun test && git log -5" }),
     ).resolves.toBeUndefined()
+    expect(harness.sessionLookups()).toBe(0)
+    await harness.executeBefore("shell", { command: "git commit --help" })
+    expect(harness.sessionLookups()).toBe(0)
+    await harness.executeBefore("shell", { command: "git commit -s -m 'core: Check lookup'" })
+    expect(harness.sessionLookups()).toBe(1)
   })
 
   test("allows conforming git commit commands", async () => {

@@ -183,7 +183,7 @@ describe("extractGitCommits", () => {
 
   test("bounds substitution recursion through heredoc delimiters", () => {
     for (const command of ["echo $(" + "cat <<$(".repeat(20000) + "true", "cat <<$(".repeat(20000) + "true"]) {
-      expect(() => extractGitCommits(command)).toThrow("Shell parsing limit exceeded. Run git commit directly.")
+      expect(() => extractGitCommits(command)).toThrow("Shell parsing limit exceeded. Simplify the unsupported syntax.")
     }
   })
 
@@ -219,23 +219,68 @@ describe("extractGitCommits", () => {
 
   test("handles ANSI-C quotes and rejects ambiguous substitution syntax", () => {
     expect(extractGitCommits(String.raw`echo $(git commit -m "bad"; echo $'a\')')`)[0]?.messages).toEqual(["bad"])
-    expect(() => extractGitCommits(`echo $(git commit -m "bad"; echo "\${x:-")'"}")`)).toThrow("double-quoted parameter expansion")
-    expect(() => extractGitCommits(`echo "$(case x in x) git commit -m "bad"; echo "'" ;; esac)"`)).toThrow("case patterns inside a command substitution")
+    expect(extractGitCommits(`echo $(git commit -m "bad"; echo "\${x:-")'"}")`)[0]?.messages).toEqual(["bad"])
+    expect(extractGitCommits(`echo "$(case x in x) git commit -m "bad"; echo "'" ;; esac)"`)[0]?.messages).toEqual(["bad"])
     expect(extractGitCommits('echo "$(echo "${HOME}")"; git commit -m "core: ordinary"')[0]?.messages).toEqual(["core: ordinary"])
     expect(extractGitCommits(String.raw`echo $(echo $'a\nb'); git commit -m "core: ordinary"`)[0]?.messages).toEqual(["core: ordinary"])
     expect(extractGitCommits('echo "$(printf %s case)"; git commit -m "core: ordinary"')[0]?.messages).toEqual(["core: ordinary"])
-    expect(() => extractGitCommits('echo "$(if true; then case x in x) git commit -m bad;; esac; fi)"')).toThrow("case patterns inside a command substitution")
+    expect(extractGitCommits('echo "$(if true; then case x in x) git commit -m bad;; esac; fi)"')[0]?.messages).toEqual(["bad"])
     expect(() => extractGitCommits('echo "$(function f { case x in x) git commit -m bad;; esac; }; f)"')).toThrow("function or coproc declarations inside a command substitution")
     expect(() => extractGitCommits('echo "$(coproc { case x in x) git commit -m bad;; esac; }; wait)"')).toThrow("function or coproc declarations inside a command substitution")
-    expect(() => extractGitCommits('echo "$(time -p { case x in x) git commit -m bad;; esac; })"')).toThrow("case patterns inside a command substitution")
-    expect(() => extractGitCommits('echo "$(time -p -- case x in x) git commit -m bad;; esac)"')).toThrow("case patterns inside a command substitution")
-    expect(() => extractGitCommits('echo "$(time -- case x in x) git commit -m bad;; esac)"')).toThrow("case patterns inside a command substitution")
+    expect(extractGitCommits('echo "$(time -p { case x in x) git commit -m bad;; esac; })"')[0]?.messages).toEqual(["bad"])
+    expect(extractGitCommits('echo "$(time -p -- case x in x) git commit -m bad;; esac)"')[0]?.messages).toEqual(["bad"])
+    expect(extractGitCommits('echo "$(time -- case x in x) git commit -m bad;; esac)"')[0]?.messages).toEqual(["bad"])
   })
 
-  test("rejects nested quoting in double-quoted parameter expansions", () => {
-    expect(() => extractGitCommits(`echo "\${x:-"'"}"; git commit -m "bad"`)).toThrow("double-quoted parameter expansion")
+  test("preserves nested quoting in double-quoted parameter expansions", () => {
+    expect(extractGitCommits(`echo "\${x:-"'"}"; git commit -m "bad"`)[0]?.messages).toEqual(["bad"])
     expect(extractGitCommits('echo "${HOME}"; git commit -m "core: literal"')[0]?.messages).toEqual(["core: literal"])
     expect(tokenizeShell('echo "${x:-default}"')[1]?.value).toBe("${x:-default}")
+
+    for (const parameter of ['${VAR:-"default"}', '${VAR:-"${OTHER:-"default"}"}', '${VAR:-"a ) b"}']) {
+      expect(extractGitCommits(`printf %s "${parameter}"`)).toEqual([])
+      expect(tokenizeShell(`printf %s "${parameter}"`)[2]).toEqual({ type: "word", value: parameter, expansion: true })
+      const command = `git commit -m "core: ${parameter}"`
+      expect(() => validateGitCommits(extractGitCommits(command), defaultConfig, command)).toThrow("shell expansion")
+    }
+
+    for (const parameter of ['${VAR:-"$(git commit -m bad)"}', '${VAR:-`git commit -m bad`}']) {
+      expect(() => extractGitCommits(`printf %s "${parameter}"`)).toThrow("Pre-execution shell inspection failed")
+    }
+  })
+
+  test("extracts and validates case branch commits inside substitutions", () => {
+    for (const terminator of [";;", ";&", ";;&"]) {
+      for (const pattern of ["x", "(x", "x|y", "x|esac", "\\x|esac", "\\\nx|esac", "in|esac", "(esac|x", '")"']) {
+        const body = `case x in ${pattern}) git commit -m bad${terminator} y) printf ok;; esac`
+        const command = `printf %s "$(${body})"`
+        const invocations = extractGitCommits(command)
+        expect(invocations).toHaveLength(1)
+        expect(invocations[0]?.messages).toEqual(["bad"])
+        expect(() => validateGitCommits(invocations, defaultConfig, command)).toThrow("Missing scope")
+      }
+    }
+
+    expect(extractGitCommits('printf %s "$(case x in x) printf ok;; esac)"')).toEqual([])
+    expect(extractGitCommits('printf %s "$(case x in (x) case y in y) git commit -m bad;; esac;; esac)"')[0]?.messages).toEqual(["bad"])
+  })
+
+  test("uses command-neutral pre-execution diagnostics for dynamic shell bodies", () => {
+    for (const command of ['bash -c "$SCRIPT"', 'bash -c "FOO=$BAR pytest"', '$COMMAND commit -m bad', 'g${X}it commit -m bad']) {
+      expect(() => extractGitCommits(command)).toThrow("[commit-guard] Pre-execution shell inspection failed:")
+    }
+
+    expect(() => extractGitCommits('bash -c "FOO=$BAR pytest"')).toThrow("Use a literal shell body; if committing, run git commit directly.")
+    expect(extractGitCommits("bash -c 'FOO=$BAR pytest'")).toEqual([])
+    expect(() => tokenizeShell("printf 'unterminated")).toThrow("[commit-guard] Pre-execution shell inspection failed:")
+  })
+
+  test("rejects expanded Git subcommands after global options", () => {
+    for (const git of ["git", "/usr/bin/git"]) {
+      for (const options of ["", "--no-pager ", "-- ", "--exec-path /bin "]) {
+        expect(() => extractGitCommits(`${git} ${options}"\${SUBCOMMAND:-"commit"}" -m bad`)).toThrow("Pre-execution shell inspection failed")
+      }
+    }
   })
 
   test("keeps ANSI-C control escapes within their quote boundaries", () => {
@@ -295,7 +340,7 @@ describe("extractGitCommits", () => {
       expect(() => validateGitCommits(invocations, defaultConfig, command)).toThrow("Missing scope")
     }
 
-    expect(() => extractGitCommits('bash -c "$SCRIPT"')).toThrow("Run git commit directly")
+    expect(() => extractGitCommits('bash -c "$SCRIPT"')).toThrow("if committing, run git commit directly")
   })
 
   test("explains unterminated substitutions with their opening positions", () => {

@@ -76,7 +76,7 @@ function isWordSeparator(character: string): boolean {
 }
 
 function consumeCommandSubstitution(command: string, start: number, nesting = 0): CommandSubstitution {
-  if (nesting > 12) throw new Error("Shell parsing limit exceeded. Run git commit directly.")
+  if (nesting > 12) throw inspectionError("Shell parsing limit exceeded. Simplify the unsupported syntax.")
   let depth = 1
   let quote: "'" | '"' | "$'" | undefined
   let i = start + 2
@@ -85,11 +85,13 @@ function consumeCommandSubstitution(command: string, start: number, nesting = 0)
   let timeOption = false
   let arithmeticDepth: number | undefined = command[start + 2] === "(" ? 1 : undefined
   const pendingHeredocs: HeredocDelimiter[] = []
+  const cases: { depth: number; phase: "word" | "in" | "pattern" | "body"; patternStart: boolean }[] = []
 
   while (i < command.length) {
     const character = command[i]
 
     if (character === undefined) break
+    const activeCase = cases.at(-1)
 
     if (quote === "$'") {
       if (character === "'") quote = undefined
@@ -129,6 +131,7 @@ function consumeCommandSubstitution(command: string, start: number, nesting = 0)
 
     if (character === "\\") {
       if (command[i + 1] !== "\n") {
+        if (activeCase?.depth === depth && activeCase.phase === "pattern") activeCase.patternStart = false
         atWordStart = false
         atCommandStart = false
       }
@@ -163,7 +166,18 @@ function consumeCommandSubstitution(command: string, start: number, nesting = 0)
       continue
     }
 
-    if (atCommandStart && atWordStart && !isWordSeparator(character) && character !== "#") {
+    if (activeCase?.depth === depth && activeCase.phase === "body" && character === ";" &&
+      (command[i + 1] === ";" || command[i + 1] === "&")) {
+      i += command.slice(i, i + 3) === ";;&" ? 3 : 2
+      activeCase.phase = "pattern"
+      activeCase.patternStart = true
+      atWordStart = true
+      atCommandStart = true
+      continue
+    }
+
+    if ((atCommandStart || activeCase?.phase === "word" || activeCase?.phase === "in" || activeCase?.phase === "pattern") &&
+      atWordStart && !isWordSeparator(character) && character !== "#") {
       let word = ""
 
       for (let end = i; end < command.length; end++) {
@@ -178,12 +192,24 @@ function consumeCommandSubstitution(command: string, start: number, nesting = 0)
         word += next
       }
 
-      if (word === "case") {
-        throw new Error("Cannot parse case patterns inside a command substitution. Run the case command separately or run git commit directly.")
+      const patternWord = activeCase?.phase === "pattern"
+
+      if (activeCase?.depth === depth && activeCase.phase === "word") {
+        activeCase.phase = "in"
+      } else if (activeCase?.depth === depth && activeCase.phase === "in") {
+        if (word !== "in") throw inspectionError("Cannot parse case header. Simplify the unsupported syntax.")
+        activeCase.phase = "pattern"
+      } else if (word === "esac" && activeCase?.depth === depth &&
+        (activeCase.phase !== "pattern" || activeCase.patternStart)) {
+        cases.pop()
+      } else if (word === "case" && activeCase?.phase !== "pattern") {
+        cases.push({ depth, phase: "word", patternStart: true })
       }
 
-      if (word === "function" || word === "coproc") {
-        throw new Error("Cannot parse function or coproc declarations inside a command substitution. Run the declaration separately or run git commit directly.")
+      if (activeCase !== undefined && patternWord) activeCase.patternStart = false
+
+      if (!patternWord && (word === "function" || word === "coproc")) {
+        throw inspectionError("Cannot parse function or coproc declarations inside a command substitution. Run the declaration separately.")
       }
 
       atCommandStart = timeOption && (word === "-p" || word === "--") || commandPrefixes.has(word) || word === "{"
@@ -229,6 +255,14 @@ function consumeCommandSubstitution(command: string, start: number, nesting = 0)
     }
 
     if (character === "(") {
+      if (activeCase?.depth === depth && activeCase.phase === "pattern") {
+        activeCase.patternStart = false
+        i++
+        atWordStart = true
+
+        continue
+      }
+
       if (arithmeticDepth === undefined && atCommandStart && command[i + 1] === "(") arithmeticDepth = depth
       depth++
       i++
@@ -238,6 +272,15 @@ function consumeCommandSubstitution(command: string, start: number, nesting = 0)
     }
 
     if (character === ")") {
+      if (activeCase?.depth === depth && activeCase.phase === "pattern") {
+        activeCase.phase = "body"
+        atCommandStart = true
+        atWordStart = true
+        i++
+
+        continue
+      }
+
       depth--
 
       if (depth === arithmeticDepth) arithmeticDepth = undefined
@@ -262,7 +305,7 @@ function consumeCommandSubstitution(command: string, start: number, nesting = 0)
   }
 
   if (pendingHeredocs.length > 0) throw incompleteHeredoc()
-  throw new Error(`Unterminated $( substitution starting at character ${start + 1}. Close it with ) or use single quotes for literal text.`)
+  throw inspectionError(`Unterminated $( substitution starting at character ${start + 1}. Close it with ) or use single quotes for literal text.`)
 }
 
 function consumeBackticks(command: string, start: number, doubleQuoted = false): CommandSubstitution {
@@ -275,19 +318,31 @@ function consumeBackticks(command: string, start: number, doubleQuoted = false):
     content += command[i]
   }
 
-  throw new Error(`Unterminated backtick substitution starting at character ${start + 1}. Close it, escape a literal backtick as \\\`, or use single quotes.`)
+  throw inspectionError(`Unterminated backtick substitution starting at character ${start + 1}. Close it, escape a literal backtick as \\\`, or use single quotes.`)
 }
 
-function consumeQuotedParameter(command: string, start: number): number {
+function consumeQuotedParameter(command: string, start: number, nesting = 0): number {
+  if (nesting > 12) throw inspectionError("Shell parsing limit exceeded. Simplify the unsupported syntax.")
+  let quote = false
+
   for (let i = start + 2; i < command.length; i++) {
     const character = command[i]!
 
-    if (character === "}") return i + 1
+    if (character === "`" || character === "$" && command[i + 1] === "(") {
+      throw inspectionError("Cannot inspect command substitutions inside a double-quoted parameter expansion. Run substitutions separately or quote literal text.")
+    }
 
-    if (["'", '"', "\\", "`", "$", "{"].includes(character)) break
+    if (character === "\\") i++
+    else if (character === '"') quote = !quote
+    else if (character === "$" && command[i + 1] === "{") i = consumeQuotedParameter(command, i, nesting + 1) - 1
+    else if (character === "}" && !quote) return i + 1
   }
 
-  throw new Error("Cannot parse nested quoting or expansions in a double-quoted parameter expansion. Use a simple parameter such as \"${HOME}\" or run git commit directly.")
+  throw inspectionError("Cannot parse an incomplete double-quoted parameter expansion. Close its quotes and braces or quote literal text.")
+}
+
+function inspectionError(message: string): Error {
+  return new Error(`[commit-guard] Pre-execution shell inspection failed: ${message}`)
 }
 
 function ansiEscape(command: string, start: number): ANSIEscape {
@@ -312,7 +367,7 @@ function ansiEscape(command: string, start: number): ANSIEscape {
   if (digits !== undefined) {
     const code = Number.parseInt(digits, count > 0 ? 16 : 8)
 
-    if (code > 0x10ffff) throw new Error("Cannot validate this ANSI-C escape. Supply the message literally.")
+    if (code > 0x10ffff) throw inspectionError("Cannot validate this ANSI-C escape. Supply literal text.")
 
     const end = start + (count > 0 ? 2 : 1) + digits.length
 
@@ -342,7 +397,7 @@ function heredocSubstitutions(body: string): string[] {
     if (body[i] === "\\" && ["\\", "$", "`"].includes(body[i + 1] ?? "")) {
       i++
     } else if (body[i] === "`") {
-      throw new Error("Cannot validate command substitutions in an unquoted heredoc. Quote the delimiter, for example: <<'EOF'.")
+      throw inspectionError("Cannot validate command substitutions in an unquoted heredoc. Quote the delimiter, for example: <<'EOF'.")
     } else if (body[i] === "$" && body[i + 1] === "(") {
       const substitution = consumeCommandSubstitution(body, i)
 
@@ -355,7 +410,7 @@ function heredocSubstitutions(body: string): string[] {
 }
 
 function incompleteHeredoc(): Error {
-  return new Error("Cannot validate an incomplete heredoc. Close its delimiter on a separate line before running the command.")
+  return inspectionError("Cannot validate an incomplete heredoc. Close its delimiter on a separate line before running the command.")
 }
 
 function consumeHeredoc(command: string, start: number, heredoc: HeredocDelimiter): CommandSubstitution {
@@ -594,7 +649,7 @@ function tokenizeShellInput(command: string, start = 0, delimiterOnly = false, n
           }
         }
 
-        if (!complete) throw new Error(
+        if (!complete) throw inspectionError(
           `Unterminated ANSI-C quote starting at character ${quoteStart + 1}. Close the quote before running the command.`,
         )
 
@@ -616,7 +671,7 @@ function tokenizeShellInput(command: string, start = 0, delimiterOnly = false, n
           i++
         }
 
-        if (command[i] !== "'") throw new Error(
+        if (command[i] !== "'") throw inspectionError(
           `Unterminated single quote starting at character ${quoteStart + 1}. Close the quote before running the command.`,
         )
 
@@ -673,7 +728,7 @@ function tokenizeShellInput(command: string, start = 0, delimiterOnly = false, n
           }
         }
 
-        if (command[i] !== '"') throw new Error(
+        if (command[i] !== '"') throw inspectionError(
           `Unterminated double quote starting at character ${quoteStart + 1}. Close the quote before running the command.`,
         )
 
@@ -715,7 +770,7 @@ function tokenizeShellInput(command: string, start = 0, delimiterOnly = false, n
 
     if (pendingDelimiter !== undefined) {
       if (unsupportedDelimiter !== undefined) {
-        throw new Error(`Cannot validate this ${unsupportedDelimiter} heredoc delimiter. Use a plain quoted delimiter such as <<'EOF'.`)
+        throw inspectionError(`Cannot validate this ${unsupportedDelimiter} heredoc delimiter. Use a plain quoted delimiter such as <<'EOF'.`)
       }
 
       const delimiter = { delimiter: value, quoted, stripTabs: tokens[pendingDelimiter]?.value.endsWith("-") === true }
@@ -891,7 +946,15 @@ function extractInvocation(
 
     if (argument === undefined) break
 
+    if (wordTokens[wordIndex]?.expansion) {
+      throw inspectionError("Cannot inspect dynamic Git options or subcommands. Use literal command words.")
+    }
+
     if (argument === "--") {
+      if (wordTokens[wordIndex + 1]?.expansion) {
+        throw inspectionError("Cannot inspect a dynamic Git subcommand. Use literal command words.")
+      }
+
       subcommand = words[wordIndex + 1]
       wordIndex += 2
       break
@@ -1055,7 +1118,7 @@ function extractInvocation(
 }
 
 export function extractGitCommits(command: string, inheritedDirectoryChange = false, depth = 0): GitCommitInvocation[] {
-  if (depth > 12 || command.length > 262144) throw new Error("Shell parsing limit exceeded. Run git commit directly.")
+  if (depth > 12 || command.length > 262144) throw inspectionError("Shell parsing limit exceeded. Simplify the unsupported syntax.")
   const tokens = tokenizeShell(command)
   const invocations: GitCommitInvocation[] = []
   let changedDirectory = inheritedDirectoryChange
@@ -1065,6 +1128,11 @@ export function extractGitCommits(command: string, inheritedDirectoryChange = fa
     const wordTokens = extractCommandWords(commandTokens)
     const words = wordTokens.map((token) => token.value)
     const commandStart = findCommandStart(words)
+
+    if (wordTokens[commandStart]?.expansion) {
+      throw inspectionError("Cannot inspect a dynamic command name. Use literal command words.")
+    }
+
     const invocation = extractInvocation(words, commandStart, wordTokens)
 
     if (/^(?:.*\/)?(?:bash|sh|zsh)$/.test(words[commandStart] ?? "")) {
@@ -1085,7 +1153,7 @@ export function extractGitCommits(command: string, inheritedDirectoryChange = fa
         const shortOptions = /^[+-][a-zA-Z]+$/.test(option)
 
         if (shortOptions && /[oO]/.test(option) && !/[oO]$/.test(option)) {
-          throw new Error("Cannot parse shell options reliably. Run git commit directly.")
+          throw inspectionError("Cannot parse shell options reliably. Simplify the unsupported syntax.")
         }
 
         const next = words[bodyIndex + 1]
@@ -1097,10 +1165,10 @@ export function extractGitCommits(command: string, inheritedDirectoryChange = fa
       if (executeString) {
         const body = wordTokens[bodyIndex]
 
-        if (body === undefined || body.expansion) throw new Error("Cannot parse shell -c body reliably. Run git commit directly.")
+        if (body === undefined || body.expansion) throw inspectionError("Cannot parse an expanded or missing shell -c body reliably. Use a literal shell body; if committing, run git commit directly.")
 
         if (/^(?:.*\/)?sh$/.test(words[commandStart] ?? "") && body.value.includes("$'")) {
-          throw new Error("Cannot parse $' quoting portably in sh -c. Use a literal bash -c or zsh -c body, or run git commit directly.")
+          throw inspectionError("Cannot parse $' quoting portably in sh -c. Use a literal bash -c or zsh -c body.")
         }
 
         const wrapperChange = words.slice(0, commandStart).some((word) => word === "env" || isAssignment(word))

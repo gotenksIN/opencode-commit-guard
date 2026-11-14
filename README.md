@@ -70,6 +70,9 @@ Repeat an explicit `workdir` when you check that checkout.
 An argument-free call selects the session directory when it is inside a Git repository, even after an explicit selection.
 If the shell result lacks a verified successful process exit, capture again instead of using a partial baseline.
 The command writes full historical messages to a private file and prints a fixed receipt.
+On Linux and macOS, capture uses Bash, portable `base64`, and a 15-second process-group watchdog.
+On Windows, capture uses Windows PowerShell through an encoded command that you can run from PowerShell, `pwsh`, `cmd.exe`, or Git Bash.
+Both capture paths limit the artifact to 256 KiB and preserve NUL-delimited Git history.
 The plugin appends the capture outcome and commit rules to the shell result.
 `RECEIPT_OK` confirms only that the artifact was written, not that the baseline was published.
 The next context call reports whether a capture is unclaimed, awaiting permission or execution, expired, or failed.
@@ -158,15 +161,26 @@ It also rejects unquoted or ambiguous standard-input sources.
 Supply the final message literally; message words containing shell expansion are rejected without evaluation.
 Single quotes and ANSI-C quotes (`$'...'`) supply literal text.
 The parser inspects commits inside command substitutions, backticks, and literal `bash`, `sh`, or `zsh` `-c` bodies.
-Use simple double-quoted parameters such as `"${HOME}"`; nested quoting, escapes, and expansions inside these parameters are rejected.
-Run `case` commands outside command substitutions; the parser rejects their ambiguous parentheses.
+Double-quoted parameters support nested defaults and quotes, such as `"${VAR:-"default"}"`, but remain expansions rather than literal message text.
+Run command substitutions and backticks outside these parameters; the parser rejects executable substitutions inside them.
+Command substitutions support command-position `case` branches, optional leading pattern parentheses, and `;;`, `;&`, and `;;&` terminators.
+The guard also validates commits inside those branches.
 Run function and `coproc` declarations outside command substitutions; their compound bodies are rejected there.
 Use `bash -c` or `zsh -c` instead of `sh -c` for bodies containing `$'` quoting; the guard rejects this nonportable syntax under `sh`.
 Unquoted heredoc delimiters match after backslash-newline continuations are removed; quote the delimiter to preserve literal body text.
-Run Git directly if a shell body is dynamic or cannot be parsed reliably.
+Use a literal shell body if expansion can change its executable words.
+Both `bash -c "$SCRIPT"` and `bash -c "FOO=$BAR pytest"` fail closed because expansion can introduce executable commands.
+Parser failures identify pre-execution shell inspection with a `[commit-guard]` prefix.
+Simplify unsupported syntax or quote literal text; run Git directly when committing.
 Put trailers in the literal message body or use `-s`; `--trailer` is rejected.
 The guard resolves the signing baseline before reporting message-format violations.
 `git commit --help` and `git commit -h` do not require a baseline.
+
+### Code Mode boundary
+
+The `commit_context` tool remains available through Code Mode.
+The OC-1 proposal to exclude it with `codemode: false` is deferred and is not implemented.
+Require the same verified foreground shell result and `Frozen commit baseline` report regardless of how you call the tool.
 
 ## Development
 
