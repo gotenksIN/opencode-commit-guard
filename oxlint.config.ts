@@ -1,29 +1,23 @@
-const config = {
-  ignorePatterns: ["dist/**"],
-  jsPlugins: [
-    { name: "anti-slop", specifier: "oxlint-plugin-anti-slop" },
-  ],
-  rules: {
-    "oxc/no-accumulating-spread": "error",
-    "anti-slop/no-array-filter-map": "error",
-    "anti-slop/no-reduce-accumulator-copy": "error",
-    "anti-slop/no-chained-type-assertions": "error",
-    "anti-slop/no-conditional-empty-object-spread": "error",
-    "anti-slop/no-known-value-widening": "error",
-    "anti-slop/no-module-mocking": "error",
-    "anti-slop/no-object-parameters": "error",
-    "anti-slop/no-reflect-apply": "error",
-    "anti-slop/no-reflect-get": "error",
-    "anti-slop/no-runtime-typeof": "error",
-    "anti-slop/no-shape-in-symbol-names": "error",
-    "anti-slop/no-unknown-parameters": "error",
-    "anti-slop/no-unknown-returns": "error",
-    "anti-slop/no-unknown-type-aliases": "error",
-    "anti-slop/no-unsafe-dictionary-type": "error",
-    "anti-slop/no-widen-then-assert": "error",
-    "anti-slop/require-readable-spacing": "error",
-    "anti-slop/require-safety-comment-for-type-assertion": "error",
-  },
-};
+import antiSlop from "ultracite/oxlint/anti-slop";
+import core from "ultracite/oxlint/core";
 
-export default config;
+export default {
+  extends: [core, antiSlop],
+  env: core.env,
+  ignorePatterns: [...(core.ignorePatterns ?? []), "dist/**"],
+  rules: {
+    "typescript/consistent-indexed-object-style": "error",
+    "unicorn/no-immediate-mutation": "error",
+    "unicorn/prefer-reflect-apply": "error",
+    "oxc/no-accumulating-spread": "error",
+    "anti-slop/no-runtime-typeof": "error",
+  },
+  overrides: [
+    {
+      files: ["src/capture.ts", "src/shell.ts"],
+      rules: {
+        "no-bitwise": ["error", { allow: ["&", "|"] }],
+      },
+    },
+  ],
+};

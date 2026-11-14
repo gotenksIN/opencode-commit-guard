@@ -1,1 +1,1 @@
-export { default } from "./src/plugin.js"
+export { default } from "./src/plugin.js";

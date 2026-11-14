@@ -1,22 +1,25 @@
-import { afterEach, describe, expect, test } from "bun:test"
-import { mkdirSync, rmSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
-import { defaultConfig } from "../src/types.js"
-import { validateGitCommits } from "../src/validator.js"
-import type { GitCommitInvocation } from "../src/types.js"
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import path from "node:path";
 
-const testDir = join(import.meta.dir, ".validator-tmp")
+import { defaultConfig } from "../src/types.js";
+import type { GitCommitInvocation } from "../src/types.js";
+import { validateGitCommits } from "../src/validator.js";
+
+const { join } = path;
+
+const testDir = join(import.meta.dir, ".validator-tmp");
 
 afterEach(() => {
-  rmSync(testDir, { recursive: true, force: true })
-})
+  rmSync(testDir, { recursive: true, force: true });
+});
 
-function invocation(
+const invocation = function invocation(
   messages: string[],
   hasSignoffFlag = true,
   filePaths: string[] = [],
   isAmend = false,
-  isHelp = false,
+  isHelp = false
 ): GitCommitInvocation {
   return {
     messages,
@@ -24,8 +27,8 @@ function invocation(
     hasSignoffFlag,
     isAmend,
     isHelp,
-  }
-}
+  };
+};
 
 describe("validator - scope rules", () => {
   test("accepts plain and conventional scopes with hyphens, underscores, slashes, and dots", () => {
@@ -37,13 +40,15 @@ describe("validator - scope rules", () => {
       "arm64: dts: update clock frequencies",
       "feat(parser): add subshell support",
       "fix(ui): resolve button alignment issue",
-    ]
+    ];
 
     for (const msg of scopes) {
-      const inv = [invocation([msg])]
-      expect(() => validateGitCommits(inv, defaultConfig, "git commit")).not.toThrow()
+      const inv = [invocation([msg])];
+      expect(() => {
+        validateGitCommits(inv, defaultConfig, "git commit");
+      }).not.toThrow();
     }
-  })
+  });
 
   test("accepts chained fixup and squash prefixes with standard and conventional scopes", () => {
     const subjects = [
@@ -52,12 +57,18 @@ describe("validator - scope rules", () => {
       "fixup! feat(parser): add token",
       "fixup! squash! fix(ui): align button",
       "fixup! fixup! build: update task",
-    ]
+    ];
 
     for (const subject of subjects) {
-      expect(() => validateGitCommits([invocation([subject])], defaultConfig, "git commit")).not.toThrow()
+      expect(() => {
+        validateGitCommits(
+          [invocation([subject])],
+          defaultConfig,
+          "git commit"
+        );
+      }).not.toThrow();
     }
-  })
+  });
 
   test("rejects invalid fixup and squash subjects while preserving the full subject", () => {
     const invalidSubjects = [
@@ -67,89 +78,120 @@ describe("validator - scope rules", () => {
       ["fixup! : empty scope", "Missing scope before colon"],
       ["squash! kernel:no space", "Missing space after colon"],
       ["fixup! kernel:", "Subject text after colon is empty"],
-    ]
+    ];
 
     for (const [subject, violation] of invalidSubjects) {
-      if (subject === undefined || violation === undefined) continue
+      if (subject === undefined || violation === undefined) {
+        continue;
+      }
 
-      expect(() => validateGitCommits([invocation([subject])], defaultConfig, "git commit")).toThrow(violation)
-      expect(() => validateGitCommits([invocation([subject])], defaultConfig, "git commit")).toThrow(subject)
+      expect(() => {
+        validateGitCommits(
+          [invocation([subject])],
+          defaultConfig,
+          "git commit"
+        );
+      }).toThrow(violation);
+      expect(() => {
+        validateGitCommits(
+          [invocation([subject])],
+          defaultConfig,
+          "git commit"
+        );
+      }).toThrow(subject);
     }
-  })
+  });
 
   test("rejects malformed scope prefixes with a specific violation", () => {
     const cases = [
-      ["Add support for new sensor", 'Missing scope in subject line "Add support for new sensor"'],
+      [
+        "Add support for new sensor",
+        'Missing scope in subject line "Add support for new sensor"',
+      ],
       [": add support for new sensor", "Missing scope before colon"],
       ["kernel:add support for new sensor", "Missing space after colon"],
       ["kernel:", "Subject text after colon is empty"],
-    ]
+    ];
 
     for (const [subject, violation] of cases) {
-      if (subject === undefined || violation === undefined) continue
+      if (subject === undefined || violation === undefined) {
+        continue;
+      }
 
-      expect(() => validateGitCommits([invocation([subject])], defaultConfig, "git commit")).toThrow(violation)
+      expect(() => {
+        validateGitCommits(
+          [invocation([subject])],
+          defaultConfig,
+          "git commit"
+        );
+      }).toThrow(violation);
     }
-  })
+  });
 
   test("allows commits without scope when requireScope is false", () => {
-    const inv = [invocation(["Add freeform subject line"])]
-    const config = { ...defaultConfig, requireScope: false }
-    expect(() => validateGitCommits(inv, config, "git commit")).not.toThrow()
-  })
-})
+    const inv = [invocation(["Add freeform subject line"])];
+    const config = { ...defaultConfig, requireScope: false };
+    expect(() => {
+      validateGitCommits(inv, config, "git commit");
+    }).not.toThrow();
+  });
+});
 
 describe("validator - allowed scopes", () => {
   const allowedConfig = {
     ...defaultConfig,
     allowedScopes: ["kernel", "releasetools", "build", "parser"],
-  }
+  };
 
   test("accepts scope present in allowedScopes", () => {
-    const inv = [invocation(["kernel: add support for foo"])]
-    expect(() => validateGitCommits(inv, allowedConfig, "git commit")).not.toThrow()
-  })
+    const inv = [invocation(["kernel: add support for foo"])];
+    expect(() => {
+      validateGitCommits(inv, allowedConfig, "git commit");
+    }).not.toThrow();
+  });
 
   test("accepts conventional commit whose inner scope is in allowedScopes", () => {
-    const inv = [invocation(["feat(parser): add subshell tokenization"])]
-    expect(() => validateGitCommits(inv, allowedConfig, "git commit")).not.toThrow()
-  })
+    const inv = [invocation(["feat(parser): add subshell tokenization"])];
+    expect(() => {
+      validateGitCommits(inv, allowedConfig, "git commit");
+    }).not.toThrow();
+  });
 
   test("rejects scope not present in allowedScopes", () => {
-    const inv = [invocation(["networking: fix tcp buffer"])]
-    expect(() => validateGitCommits(inv, allowedConfig, "git commit")).toThrow(
-      'Scope "networking" is not in the allowed scopes list. Allowed scopes: kernel, releasetools, build, parser.',
-    )
-  })
+    const inv = [invocation(["networking: fix tcp buffer"])];
+    expect(() => {
+      validateGitCommits(inv, allowedConfig, "git commit");
+    }).toThrow(
+      'Scope "networking" is not in the allowed scopes list. Allowed scopes: kernel, releasetools, build, parser.'
+    );
+  });
 
   test("enforces allowedScopes when requireScope is false", () => {
-    const inv = [invocation(["networking: fix tcp buffer"])]
-    const config = { ...allowedConfig, requireScope: false }
-    expect(() => validateGitCommits(inv, config, "git commit")).toThrow(
-      'Scope "networking" is not in the allowed scopes list.',
-    )
-  })
+    const inv = [invocation(["networking: fix tcp buffer"])];
+    const config = { ...allowedConfig, requireScope: false };
+    expect(() => {
+      validateGitCommits(inv, config, "git commit");
+    }).toThrow('Scope "networking" is not in the allowed scopes list.');
+  });
 
   test("enforces allowedScopes for fixup and squash subjects", () => {
-    expect(() => validateGitCommits(
-      [invocation(["fixup! feat(parser): add token"])],
-      allowedConfig,
-      "git commit",
-    )).not.toThrow()
+    expect(() => {
+      validateGitCommits(
+        [invocation(["fixup! feat(parser): add token"])],
+        allowedConfig,
+        "git commit"
+      );
+    }).not.toThrow();
 
-    const subject = "squash! feat(networking): fix socket"
-    expect(() => validateGitCommits(
-      [invocation([subject])],
-      allowedConfig,
-      "git commit",
-    )).toThrow('Scope "feat(networking)" is not in the allowed scopes list')
-    expect(() => validateGitCommits(
-      [invocation([subject])],
-      allowedConfig,
-      "git commit",
-    )).toThrow(subject)
-  })
-})
+    const subject = "squash! feat(networking): fix socket";
+    expect(() => {
+      validateGitCommits([invocation([subject])], allowedConfig, "git commit");
+    }).toThrow('Scope "feat(networking)" is not in the allowed scopes list');
+    expect(() => {
+      validateGitCommits([invocation([subject])], allowedConfig, "git commit");
+    }).toThrow(subject);
+  });
+});
 
 describe("validator - line length limit", () => {
   test("rejects body line exceeding 72 characters and identifies line number", () => {
@@ -158,19 +200,23 @@ describe("validator - line length limit", () => {
       "",
       "Short explanation paragraph.",
       "This particular line has way too many words and stretches on and on past seventy-two columns.",
-    ].join("\n")
+    ].join("\n");
 
-    const inv = [invocation([message])]
-    expect(() => validateGitCommits(inv, defaultConfig, "git commit")).toThrow(/Line 4 \(93 chars, max 72\)/)
-  })
+    const inv = [invocation([message])];
+    expect(() => {
+      validateGitCommits(inv, defaultConfig, "git commit");
+    }).toThrow(/Line 4 \(93 chars, max 72\)/u);
+  });
 
   test("allows disabling line length check with maxLineLength: 0", () => {
-    const longMsg = "kernel: add very long feature ".repeat(5)
-    const inv = [invocation([longMsg])]
-    const config = { ...defaultConfig, maxLineLength: 0 }
-    expect(() => validateGitCommits(inv, config, "git commit")).not.toThrow()
-  })
-})
+    const longMsg = "kernel: add very long feature ".repeat(5);
+    const inv = [invocation([longMsg])];
+    const config = { ...defaultConfig, maxLineLength: 0 };
+    expect(() => {
+      validateGitCommits(inv, config, "git commit");
+    }).not.toThrow();
+  });
+});
 
 describe("validator - signoff requirement", () => {
   test("accepts commit with Signed-off-by trailer in body without -s flag", () => {
@@ -180,138 +226,213 @@ describe("validator - signoff requirement", () => {
       "Explanation text.",
       "",
       "Signed-off-by: Jane Doe <jane@example.com>",
-    ].join("\n")
+    ].join("\n");
 
-    const inv = [invocation([message], false)]
-    expect(() => validateGitCommits(inv, defaultConfig, "git commit")).not.toThrow()
-  })
+    const inv = [invocation([message], false)];
+    expect(() => {
+      validateGitCommits(inv, defaultConfig, "git commit");
+    }).not.toThrow();
+  });
 
   test("rejects commit missing both signoff flag and trailer", () => {
-    const inv = [invocation(["kernel: add foo"], false)]
-    expect(() => validateGitCommits(inv, defaultConfig, "git commit")).toThrow(
-      "Missing commit signoff",
-    )
-  })
+    for (const message of [
+      "kernel: add foo",
+      "kernel: add foo\n\nſigned-off-by: Dev <dev@example.com>",
+    ]) {
+      const inv = [invocation([message], false)];
+      expect(() => {
+        validateGitCommits(inv, defaultConfig, "git commit");
+      }).toThrow("Missing commit signoff");
+    }
+  });
 
   test("rejects a signoff pattern used as the subject line", () => {
-    const config = { ...defaultConfig, requireScope: false }
+    const config = { ...defaultConfig, requireScope: false };
 
-    for (const message of ["Signed-off-by: Jane Doe <jane@example.com>", "\nSigned-off-by: Jane Doe <jane@example.com>"]) {
-      expect(() => validateGitCommits([invocation([message], false)], config, "git commit")).toThrow("Missing commit signoff")
+    for (const message of [
+      "Signed-off-by: Jane Doe <jane@example.com>",
+      "\nSigned-off-by: Jane Doe <jane@example.com>",
+    ]) {
+      expect(() => {
+        validateGitCommits(
+          [invocation([message], false)],
+          config,
+          "git commit"
+        );
+      }).toThrow("Missing commit signoff");
     }
-  })
+  });
 
   test("allows commit without signoff when the captured signing policy does not enforce it", () => {
-    const inv = [invocation(["kernel: add foo"], false)]
-    const config = { ...defaultConfig, enforceSignoff: false }
-    expect(() => validateGitCommits(inv, config, "git commit")).not.toThrow()
-  })
+    const inv = [invocation(["kernel: add foo"], false)];
+    const config = { ...defaultConfig, enforceSignoff: false };
+    expect(() => {
+      validateGitCommits(inv, config, "git commit");
+    }).not.toThrow();
+  });
 
   test("enforces signoff requirements for explicit fixup and squash messages", () => {
-    expect(() => validateGitCommits(
-      [invocation(["fixup! kernel: fix race"], false)],
-      defaultConfig,
-      "git commit",
-    )).toThrow("Missing commit signoff")
-    expect(() => validateGitCommits(
-      [invocation(["squash! kernel: fix race"], false)],
-      defaultConfig,
-      "git commit",
-    )).toThrow("Missing commit signoff")
-  })
-})
+    expect(() => {
+      validateGitCommits(
+        [invocation(["fixup! kernel: fix race"], false)],
+        defaultConfig,
+        "git commit"
+      );
+    }).toThrow("Missing commit signoff");
+    expect(() => {
+      validateGitCommits(
+        [invocation(["squash! kernel: fix race"], false)],
+        defaultConfig,
+        "git commit"
+      );
+    }).toThrow("Missing commit signoff");
+  });
+});
 
 describe("validator - file inputs and amend commits", () => {
   test("rejects message files without disclosing their content", () => {
-    mkdirSync(testDir, { recursive: true })
-    const filePath = join(testDir, "commit_msg.txt")
-    const secret = "private message content"
-    writeFileSync(filePath, secret)
-    const inv = [invocation([], true, [filePath])]
-    let caught: Error | undefined
+    mkdirSync(testDir, { recursive: true });
+    const filePath = join(testDir, "commit_msg.txt");
+    const secret = "private message content";
+    writeFileSync(filePath, secret);
+    const inv = [invocation([], true, [filePath])];
+    let caught: Error | undefined;
 
     try {
-      validateGitCommits(inv, defaultConfig, "git commit -F ...")
+      validateGitCommits(inv, defaultConfig, "git commit -F ...");
     } catch (error) {
-      if (error instanceof Error) caught = error
+      if (error instanceof Error) {
+        caught = error;
+      }
     }
 
-    expect(caught?.message).toContain("Cannot validate a commit message from -F/--file before permission approval")
-    expect(caught?.message).toContain("git commit -s -m $'scope: Subject\\n\\nBody line one.\\nBody line two.'")
-    expect(caught?.message).not.toContain(secret)
-  })
+    expect(caught?.message).toContain(
+      "Cannot validate a commit message from -F/--file before permission approval"
+    );
+    expect(caught?.message).toContain(
+      "git commit -s -m $'scope: Subject\\n\\nBody line one.\\nBody line two.'"
+    );
+    expect(caught?.message).not.toContain(secret);
+  });
 
   test("allows fixup commits without an explicit message", () => {
-    const inv = [{ ...invocation([], false), isFixup: true }]
-    expect(() => validateGitCommits(inv, defaultConfig, "git commit --fixup=HEAD")).not.toThrow()
-  })
+    const inv = [{ ...invocation([], false), isFixup: true }];
+    expect(() => {
+      validateGitCommits(inv, defaultConfig, "git commit --fixup=HEAD");
+    }).not.toThrow();
+  });
 
   test("allows no-edit amendments without reading repository history or message files", () => {
-    const inv = [{ ...invocation([], false, [], true), hasNoEdit: true }]
-    expect(() => validateGitCommits(inv, defaultConfig, "git commit --amend --no-edit")).not.toThrow()
-    expect(() => validateGitCommits(
-      [{ ...invocation([], false, ["message.txt"], true), hasNoEdit: true }],
-      defaultConfig,
-      "git commit --amend --no-edit -F message.txt",
-    )).toThrow(
-      "Cannot validate a commit message from -F/--file before permission approval",
-    )
-  })
+    const inv = [{ ...invocation([], false, [], true), hasNoEdit: true }];
+    expect(() => {
+      validateGitCommits(inv, defaultConfig, "git commit --amend --no-edit");
+    }).not.toThrow();
+    expect(() => {
+      validateGitCommits(
+        [{ ...invocation([], false, ["message.txt"], true), hasNoEdit: true }],
+        defaultConfig,
+        "git commit --amend --no-edit -F message.txt"
+      );
+    }).toThrow(
+      "Cannot validate a commit message from -F/--file before permission approval"
+    );
+  });
 
   test("validates amend commits when new message is provided", () => {
-    const invalidAmend = [invocation(["Missing scope on amend"], true, [], true)]
-    expect(() => validateGitCommits(invalidAmend, defaultConfig, "git commit --amend -m ...")).toThrow(
-      "Missing scope in subject line",
-    )
+    const invalidAmend = [
+      invocation(["Missing scope on amend"], true, [], true),
+    ];
 
-    const validAmend = [invocation(["kernel: valid amended message"], true, [], true)]
-    expect(() => validateGitCommits(validAmend, defaultConfig, "git commit --amend -m ...")).not.toThrow()
-  })
+    expect(() => {
+      validateGitCommits(
+        invalidAmend,
+        defaultConfig,
+        "git commit --amend -m ..."
+      );
+    }).toThrow("Missing scope in subject line");
+
+    const validAmend = [
+      invocation(["kernel: valid amended message"], true, [], true),
+    ];
+
+    expect(() => {
+      validateGitCommits(
+        validAmend,
+        defaultConfig,
+        "git commit --amend -m ..."
+      );
+    }).not.toThrow();
+  });
 
   test("rejects non-amend commit with no message provided", () => {
-    const inv = [invocation([], true)]
-    expect(() => validateGitCommits(inv, defaultConfig, "git commit -s")).toThrow(
-      "No commit message provided",
-    )
-  })
-})
+    const inv = [invocation([], true)];
+    expect(() => {
+      validateGitCommits(inv, defaultConfig, "git commit -s");
+    }).toThrow("No commit message provided");
+  });
+});
 
 describe("validator - error message formatting", () => {
   test("uses the captured signoff policy and first allowed scope in one example", () => {
     for (const enforceSignoff of [true, false]) {
-      const config = { ...defaultConfig, enforceSignoff, allowedScopes: ["core", "docs"] }
+      const config = {
+        ...defaultConfig,
+        enforceSignoff,
+        allowedScopes: ["core", "docs"],
+      };
 
       try {
-        validateGitCommits([invocation(["bad"], false)], config, "private attempted command")
-        throw new Error("Expected rejection")
+        validateGitCommits(
+          [invocation(["bad"], false)],
+          config,
+          "private attempted command"
+        );
+        throw new Error("Expected rejection");
       } catch (error) {
-        if (!(error instanceof Error)) throw error
-        expect(error.message).toContain(enforceSignoff ? "Signoff required: captured commit.gpgsign=true. Keep -s." : "Signoff not required: captured commit.gpgsign=false|unset.")
-        expect(error.message).toContain(`git commit${enforceSignoff ? " -s" : ""} -m $'core: Subject\\n\\nBody line one.\\nBody line two.'`)
-        expect(error.message).not.toContain("private attempted command")
+        if (!(error instanceof Error)) {
+          throw error;
+        }
+
+        expect(error.message).toContain(
+          enforceSignoff
+            ? "Signoff required: captured commit.gpgsign=true. Keep -s."
+            : "Signoff not required: captured commit.gpgsign=false|unset."
+        );
+        expect(error.message).toContain(
+          `git commit${enforceSignoff ? " -s" : ""} -m $'core: Subject\\n\\nBody line one.\\nBody line two.'`
+        );
+        expect(error.message).not.toContain("private attempted command");
       }
     }
-  })
+  });
   test("formats comprehensive error with multiple violations and examples", () => {
-    const badMessage = "bad subject without scope and stretching on way too long past seventy-two characters limit"
-    const inv = [invocation([badMessage], false)]
-    let caught: Error | undefined
+    const badMessage =
+      "bad subject without scope and stretching on way too long past seventy-two characters limit";
+
+    const inv = [invocation([badMessage], false)];
+    let caught: Error | undefined;
 
     try {
-      validateGitCommits(inv, defaultConfig, 'git commit -m "..."')
-    } catch (err) {
-      if (err instanceof Error) {
-        caught = err
+      validateGitCommits(inv, defaultConfig, 'git commit -m "..."');
+    } catch (error) {
+      if (error instanceof Error) {
+        caught = error;
       }
     }
 
-    expect(caught).toBeDefined()
-    const errorText = caught?.message ?? ""
-    expect(errorText).toContain("[commit-guard] Git commit rejected: commit message format rules violated.")
-    expect(errorText).toContain("1. Missing scope in subject line")
-    expect(errorText).toContain("2. Commit message exceeds maximum line length of 72 characters")
-    expect(errorText).toContain("3. Missing commit signoff")
-    expect(errorText).toContain("Example:")
-    expect(errorText).toContain("git commit -s -m $'scope: Subject\\n\\nBody line one.\\nBody line two.'")
-  })
-})
+    expect(caught).toBeDefined();
+    const errorText = caught?.message ?? "";
+    expect(errorText).toContain(
+      "[commit-guard] Git commit rejected: commit message format rules violated."
+    );
+    expect(errorText).toContain("1. Missing scope in subject line");
+    expect(errorText).toContain(
+      "2. Commit message exceeds maximum line length of 72 characters"
+    );
+    expect(errorText).toContain("3. Missing commit signoff");
+    expect(errorText).toContain("Example:");
+    expect(errorText).toContain(
+      "git commit -s -m $'scope: Subject\\n\\nBody line one.\\nBody line two.'"
+    );
+  });
+});

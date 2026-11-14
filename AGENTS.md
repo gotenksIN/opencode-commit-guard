@@ -27,7 +27,7 @@ Require shell tool-result metadata proving `status: "completed"`, `exit: 0`, and
 
 ## Test contracts
 
-- Test public interfaces of `extractGitCommits`, `tokenizeShell`, `validateGitCommits`, `parseConfig`, and the OpenCode plugin hooks.
+- Test public interfaces of `extractGitCommits`, `validateGitCommits`, `parseConfig`, and the OpenCode plugin hooks.
 - Assert shell tokenization across single commands, quotes, line continuations, command chains, subshells, and redirections.
 - Assert commit detection ignoring non-commit commands (`git log`, `git status`, `git commit-tree`, `echo`).
 - Assert validation rules for scopes, allowed scopes, line length limits, and signoffs.

@@ -50,11 +50,11 @@ You can also specify custom configuration options:
 
 ## Configuration options
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `requireScope` | `boolean` | `true` | Requires the first line to match `<scope>: <subject>`. |
-| `allowedScopes` | `string[]` | `undefined` | Restricts allowed scope identifiers to a specified list. |
-| `maxLineLength` | `number` | `72` | Limits every line in the subject and body to this length. Set to `0` to disable. |
+| Option          | Type       | Default     | Description                                                                      |
+| --------------- | ---------- | ----------- | -------------------------------------------------------------------------------- |
+| `requireScope`  | `boolean`  | `true`      | Requires the first line to match `<scope>: <subject>`.                           |
+| `allowedScopes` | `string[]` | `undefined` | Restricts allowed scope identifiers to a specified list.                         |
+| `maxLineLength` | `number`   | `72`        | Limits every line in the subject and body to this length. Set to `0` to disable. |
 
 ## Capture commit context
 

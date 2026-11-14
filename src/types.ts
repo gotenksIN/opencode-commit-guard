@@ -1,31 +1,36 @@
-export type JsonPrimitive = string | number | boolean | null
+import type { Schema } from "effect";
 
-export type JsonValue =
-  | JsonPrimitive
-  | JsonValue[]
-  | { readonly [key: string]: JsonValue | undefined }
+export type JsonValue = Schema.Json;
 
-export function isJSONString(value: JsonValue | undefined): value is string {
-  return Object.prototype.toString.call(value) === "[object String]"
-}
+export const isJSONString = function isJSONString(
+  value: JsonValue | undefined
+): value is string {
+  return Object.prototype.toString.call(value) === "[object String]";
+};
 
-export function isJSONNumber(value: JsonValue | undefined): value is number {
-  return Object.prototype.toString.call(value) === "[object Number]"
-}
+export const isJSONNumber = function isJSONNumber(
+  value: JsonValue | undefined
+): value is number {
+  return Object.prototype.toString.call(value) === "[object Number]";
+};
 
-export function isJSONBoolean(value: JsonValue | undefined): value is boolean {
-  return Object.prototype.toString.call(value) === "[object Boolean]"
-}
+export const isJSONBoolean = function isJSONBoolean(
+  value: JsonValue | undefined
+): value is boolean {
+  return Object.prototype.toString.call(value) === "[object Boolean]";
+};
 
-export function isRecord(value: JsonValue | undefined): value is Record<string, JsonValue> {
-  return value instanceof Object && !Array.isArray(value)
-}
+export const isRecord = function isRecord(
+  value: JsonValue | undefined
+): value is Record<string, JsonValue> {
+  return value instanceof Object && !Array.isArray(value);
+};
 
 export interface CommitGuardConfig {
-  readonly requireScope: boolean
-  readonly allowedScopes?: readonly string[]
-  readonly maxLineLength: number
-  readonly enforceSignoff: boolean
+  readonly requireScope: boolean;
+  readonly allowedScopes?: readonly string[];
+  readonly maxLineLength: number;
+  readonly enforceSignoff: boolean;
 }
 
 export const defaultConfig: CommitGuardConfig = {
@@ -33,35 +38,35 @@ export const defaultConfig: CommitGuardConfig = {
   allowedScopes: undefined,
   maxLineLength: 72,
   enforceSignoff: true,
-}
+};
 
-export type ShellTokenType = "word" | "operator" | "redirect"
+export type ShellTokenType = "word" | "operator" | "redirect";
 
 export interface ShellToken {
-  readonly type: ShellTokenType
-  readonly value: string
-  readonly substitutions?: readonly string[]
-  readonly expansion?: boolean
-  readonly heredoc?: { readonly body: string; readonly quoted: boolean }
+  readonly type: ShellTokenType;
+  readonly value: string;
+  readonly substitutions?: readonly string[];
+  readonly expansion?: boolean;
+  readonly heredoc?: { readonly body: string; readonly quoted: boolean };
 }
 
 export interface GitCommitInvocation {
-  readonly messages: readonly string[]
-  readonly filePaths: readonly string[]
-  readonly stdinMessage?: string
-  readonly stdinError?: string
-  readonly hasSignoffFlag: boolean
-  readonly isAmend: boolean
-  readonly hasNoEdit?: boolean
-  readonly isFixup?: boolean
-  readonly isHelp: boolean
-  readonly targetError?: string
-  readonly messageExpansion?: boolean
-  readonly hasTrailer?: boolean
+  readonly messages: readonly string[];
+  readonly filePaths: readonly string[];
+  readonly stdinMessage?: string;
+  readonly stdinError?: string;
+  readonly hasSignoffFlag: boolean;
+  readonly isAmend: boolean;
+  readonly hasNoEdit?: boolean;
+  readonly isFixup?: boolean;
+  readonly isHelp: boolean;
+  readonly targetError?: string;
+  readonly messageExpansion?: boolean;
+  readonly hasTrailer?: boolean;
 }
 
 export interface OverlongLine {
-  readonly lineNumber: number
-  readonly length: number
-  readonly text: string
+  readonly lineNumber: number;
+  readonly length: number;
+  readonly text: string;
 }

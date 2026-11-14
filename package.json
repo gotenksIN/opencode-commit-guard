@@ -2,36 +2,7 @@
   "name": "opencode-commit-guard",
   "version": "1.0.7",
   "description": "OpenCode V2 plugin enforcing git commit format rules",
-  "type": "module",
-  "main": "./dist/index.js",
-  "exports": {
-    ".": "./dist/index.js"
-  },
-  "files": [
-    "dist"
-  ],
-  "scripts": {
-    "lint": "oxlint .",
-    "test": "bun test",
-    "typecheck": "tsc --noEmit",
-    "build": "bun build index.ts --outdir dist --target bun --format esm --external @opencode/plugin --external effect",
-    "prepack": "bun run build"
-  },
-  "peerDependencies": {
-    "@opencode/plugin": "^2.3.0",
-    "effect": "^4.0.0"
-  },
-  "devDependencies": {
-    "@opencode/plugin": "latest",
-    "effect": "4.1.0",
-    "@types/bun": "1.4.4",
-    "oxlint": "1.90.0",
-    "oxlint-plugin-anti-slop": "github:dmmulroy/anti-slop#c44ef22ca116d0ba62a3ff663a0bd13a3f3fa40b",
-    "typescript": "7.0.2"
-  },
-  "engines": {
-    "bun": ">=1.2.0"
-  },
+  "homepage": "https://github.com/gotenksIN/opencode-commit-guard",
   "license": "MIT",
   "author": {
     "name": "Omkar Chandorkar",
@@ -41,5 +12,38 @@
     "type": "git",
     "url": "git+https://github.com/gotenksIN/opencode-commit-guard.git"
   },
-  "homepage": "https://github.com/gotenksIN/opencode-commit-guard"
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "lint": "oxlint --type-aware .",
+    "format": "oxfmt --write .",
+    "check": "oxlint --type-aware . && oxfmt --check .",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "build": "bun build index.ts --outdir dist --target bun --format esm --external @opencode/plugin --external effect",
+    "prepack": "bun run build"
+  },
+  "devDependencies": {
+    "@opencode/plugin": "latest",
+    "@types/bun": "1.4.4",
+    "effect": "4.1.0",
+    "oxfmt": "^0.78.0",
+    "oxlint": "^1.93.0",
+    "oxlint-tsgolint": "^7.0.2007",
+    "typescript": "7.0.2",
+    "ultracite": "^8.2.0"
+  },
+  "peerDependencies": {
+    "@opencode/plugin": "^2.3.0",
+    "effect": "^4.0.0"
+  },
+  "engines": {
+    "bun": ">=1.2.0"
+  }
 }

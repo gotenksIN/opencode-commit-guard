@@ -11,9 +11,9 @@ The domain model represents git commit invocations, formatting rules, configurat
 
 ```ts
 export interface CommitGuardConfig {
-  readonly requireScope: boolean
-  readonly allowedScopes?: readonly string[]
-  readonly maxLineLength: number
+  readonly requireScope: boolean;
+  readonly allowedScopes?: readonly string[];
+  readonly maxLineLength: number;
 }
 ```
 
@@ -28,14 +28,14 @@ export interface CommitGuardConfig {
 
 ```ts
 export interface GitCommitInvocation {
-  readonly messages: readonly string[]
-  readonly filePaths: readonly string[]
-  readonly stdinMessage?: string
-  readonly stdinError?: string
-  readonly hasSignoffFlag: boolean
-  readonly isAmend: boolean
-  readonly isHelp: boolean
-  readonly targetError?: string
+  readonly messages: readonly string[];
+  readonly filePaths: readonly string[];
+  readonly stdinMessage?: string;
+  readonly stdinError?: string;
+  readonly hasSignoffFlag: boolean;
+  readonly isAmend: boolean;
+  readonly isHelp: boolean;
+  readonly targetError?: string;
 }
 ```
 
@@ -51,9 +51,9 @@ export interface GitCommitInvocation {
 
 ```ts
 export interface OverlongLine {
-  readonly lineNumber: number
-  readonly length: number
-  readonly text: string
+  readonly lineNumber: number;
+  readonly length: number;
+  readonly text: string;
 }
 ```
 
@@ -62,6 +62,8 @@ export interface OverlongLine {
 ## Shell command decomposition
 
 The shell parser (`src/shell.ts`) inspects shell command strings without spawning child processes.
+
+Tokenization stays private; test shell behavior through `extractGitCommits` and `validateGitCommits`.
 
 ### 1. Tokenization (`tokenizeShell`)
 
@@ -163,6 +165,7 @@ The validation engine (`src/validator.ts`) enforces commit format invariants.
 ### 3. Error construction
 
 When violations occur, the engine throws an Error with:
+
 - A clear rejection header.
 - A numbered list of specific violations with offending text.
 - One single-line example with the first allowed scope (or `scope`), literal `\n` escapes inside `$'...'`, and `-s` only when signoff is required.
@@ -253,4 +256,6 @@ Code Mode access retains the same capture admission and publication requirements
 - Import `Plugin` and `Tool` from `@opencode/plugin/effect`; the package does not depend directly on `@opencode/schema`.
 - The package exports only `.` through `./dist/index.js` and distributes only `dist`, apart from standard package metadata and documentation.
 - The ESM distribution bundle keeps OpenCode and Effect runtime packages external so it uses the host's typed failure classes and Effect runtime.
-- Oxlint enforces custom anti-slop rules including `require-safety-comment-for-type-assertion` and `no-runtime-typeof`.
+- Oxlint uses Ultracite core and anti-slop presets with type-aware checks.
+- Permit intentional bitwise AND and OR only in shell escape decoding and capture artifact handling.
+- Oxfmt uses the Ultracite preset with semantic Markdown line breaks and excludes generated `dist` files.

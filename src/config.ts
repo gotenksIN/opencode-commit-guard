@@ -1,72 +1,94 @@
+import { Schema } from "effect";
+
+import { scopePattern } from "./scope.js";
 import {
   defaultConfig,
   isJSONBoolean,
   isJSONNumber,
   isJSONString,
   isRecord,
-} from "./types.js"
-import type { CommitGuardConfig, JsonValue } from "./types.js"
-import { scopePattern } from "./scope.js"
+} from "./types.js";
+import type { CommitGuardConfig, JsonValue } from "./types.js";
 
-export function parseConfig(options: JsonValue | undefined): CommitGuardConfig {
+export const parseConfig = function parseConfig(
+  options: JsonValue | undefined
+): CommitGuardConfig {
   if (options === undefined) {
-    return defaultConfig
+    return defaultConfig;
   }
 
   if (!isRecord(options)) {
-    throw new Error("Invalid plugin options; expected an object.")
+    throw new Error("Invalid plugin options; expected an object.");
   }
 
-  const rawRequireScope = options["requireScope"]
-  let requireScope = defaultConfig.requireScope
+  const rawRequireScope = options.requireScope;
+  let { requireScope } = defaultConfig;
 
   if (rawRequireScope !== undefined) {
     if (!isJSONBoolean(rawRequireScope)) {
-      throw new Error("Invalid plugin option requireScope; expected a boolean.")
+      throw new Error(
+        "Invalid plugin option requireScope; expected a boolean."
+      );
     }
 
-    requireScope = rawRequireScope
+    requireScope = rawRequireScope;
   }
 
-  const rawAllowedScopes = options["allowedScopes"]
-  let allowedScopes: readonly string[] | undefined = defaultConfig.allowedScopes
+  const rawAllowedScopes = options.allowedScopes;
+
+  let allowedScopes: readonly string[] | undefined =
+    defaultConfig.allowedScopes;
 
   if (rawAllowedScopes !== undefined) {
-    if (!Array.isArray(rawAllowedScopes)) {
-      throw new Error("Invalid plugin option allowedScopes; expected an array of non-empty strings.")
+    if (!Schema.is(Schema.Array(Schema.Json))(rawAllowedScopes)) {
+      throw new TypeError(
+        "Invalid plugin option allowedScopes; expected an array of non-empty strings."
+      );
     }
 
-    const scopes: string[] = []
+    const scopes: string[] = [];
 
     for (const item of rawAllowedScopes) {
       if (!isJSONString(item) || item.trim().length === 0) {
-        throw new Error("Invalid plugin option allowedScopes; expected an array of non-empty strings.")
+        throw new Error(
+          "Invalid plugin option allowedScopes; expected an array of non-empty strings."
+        );
       }
 
       if (scopePattern.exec(`${item.trim()}: Subject`)?.[1] !== item.trim()) {
-        throw new Error(`Invalid plugin option allowedScopes; scope ${JSON.stringify(item)} cannot match the commit scope syntax.`)
+        throw new Error(
+          `Invalid plugin option allowedScopes; scope ${JSON.stringify(item)} cannot match the commit scope syntax.`
+        );
       }
 
-      scopes.push(item.trim())
+      scopes.push(item.trim());
     }
 
-    allowedScopes = scopes.length > 0 ? scopes : undefined
+    allowedScopes = scopes.length > 0 ? scopes : undefined;
   }
 
-  const rawMaxLineLength = options["maxLineLength"]
-  let maxLineLength = defaultConfig.maxLineLength
+  const rawMaxLineLength = options.maxLineLength;
+  let { maxLineLength } = defaultConfig;
 
   if (rawMaxLineLength !== undefined) {
-    if (!isJSONNumber(rawMaxLineLength) || !Number.isSafeInteger(rawMaxLineLength) || rawMaxLineLength < 0) {
-      throw new Error("Invalid plugin option maxLineLength; expected an integer greater than or equal to 0.")
+    if (
+      !isJSONNumber(rawMaxLineLength) ||
+      !Number.isSafeInteger(rawMaxLineLength) ||
+      rawMaxLineLength < 0
+    ) {
+      throw new Error(
+        "Invalid plugin option maxLineLength; expected an integer greater than or equal to 0."
+      );
     }
 
     // SAFETY: isJSONNumber and Number.isSafeInteger verify rawMaxLineLength is an integer number.
-    maxLineLength = rawMaxLineLength as number
+    maxLineLength = rawMaxLineLength;
   }
 
-  if (options["requireSignoff"] !== undefined) {
-    throw new Error("Plugin option requireSignoff has been removed; signoff follows the captured effective commit.gpgsign value.")
+  if (options.requireSignoff !== undefined) {
+    throw new Error(
+      "Plugin option requireSignoff has been removed; signoff follows the captured effective commit.gpgsign value."
+    );
   }
 
   return {
@@ -74,5 +96,5 @@ export function parseConfig(options: JsonValue | undefined): CommitGuardConfig {
     allowedScopes,
     maxLineLength,
     enforceSignoff: defaultConfig.enforceSignoff,
-  }
-}
+  };
+};
