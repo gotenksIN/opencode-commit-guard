@@ -248,6 +248,9 @@ Code Mode access retains the same capture admission and publication requirements
 ## Packaging and runtime invariants
 
 - Package uses ECMAScript Modules (`"type": "module"`).
-- Dependencies on `@opencode/plugin`, `@opencode/schema`, and `effect` are declared under `dependencies`.
+- `@opencode/plugin` and `effect` are peer dependencies with compatible version ranges.
+- Development targets the latest `@opencode/plugin` and pins `effect` to its transitive version to keep one Effect runtime and compatible types.
+- Import `Plugin` and `Tool` from `@opencode/plugin/effect`; the package does not depend directly on `@opencode/schema`.
+- The package exports only `.` through `./dist/index.js` and distributes only `dist`, apart from standard package metadata and documentation.
 - The ESM distribution bundle keeps OpenCode and Effect runtime packages external so it uses the host's typed failure classes and Effect runtime.
 - Oxlint enforces custom anti-slop rules including `require-safety-comment-for-type-assertion` and `no-runtime-typeof`.

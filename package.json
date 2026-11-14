@@ -5,27 +5,25 @@
   "type": "module",
   "main": "./dist/index.js",
   "exports": {
-    ".": "./dist/index.js",
-    "./source": "./index.ts"
+    ".": "./dist/index.js"
   },
   "files": [
-    "dist",
-    "index.ts",
-    "src"
+    "dist"
   ],
   "scripts": {
     "lint": "oxlint .",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "build": "bun build index.ts --outdir dist --target bun --format esm --external @opencode/plugin --external @opencode/schema --external effect",
+    "build": "bun build index.ts --outdir dist --target bun --format esm --external @opencode/plugin --external effect",
     "prepack": "bun run build"
   },
-  "dependencies": {
-    "@opencode/plugin": "2.2.1",
-    "@opencode/schema": "2.2.1",
-    "effect": "4.0.1"
+  "peerDependencies": {
+    "@opencode/plugin": "^2.3.0",
+    "effect": "^4.0.0"
   },
   "devDependencies": {
+    "@opencode/plugin": "latest",
+    "effect": "4.1.0",
     "@types/bun": "1.4.4",
     "oxlint": "1.90.0",
     "oxlint-plugin-anti-slop": "github:dmmulroy/anti-slop#c44ef22ca116d0ba62a3ff663a0bd13a3f3fa40b",

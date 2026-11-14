@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { Tool } from "@opencode/schema/tool"
+import { Tool } from "@opencode/plugin/effect"
 import { Effect, Exit, Scope } from "effect"
 import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"

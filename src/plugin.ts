@@ -1,5 +1,4 @@
-import { Plugin } from "@opencode/plugin/effect"
-import { Tool } from "@opencode/schema/tool"
+import { Plugin, Tool } from "@opencode/plugin/effect"
 import { Effect } from "effect"
 import { randomUUID } from "node:crypto"
 import { existsSync, realpathSync } from "node:fs"
