@@ -2,6 +2,15 @@
 
 All notable changes to `opencode-commit-guard` are documented in this file.
 
+## 1.1.0 (2026-11-14)
+
+- Preserve original error causes and metadata when appending capture failure guidance in `execute.after`.
+- Prefix pre-execution shell inspection errors with `[commit-guard]` using command-neutral guidance, and support nested quoting in double-quoted `${...}` parameters and `case` patterns inside `$()` substitutions while keeping dynamic `-c` bodies fail-closed.
+- Support cross-platform context capture across Linux, macOS, and Windows shells (`pwsh`, `powershell`, `cmd.exe`, and `bash`) with portable timeout and base64 framing and platform-aware path and mode validation.
+- Defer `ctx.session.get` lookups in `execute.before` until required and document the deferred Code Mode `shell` boundary.
+- Import `Tool` from `@opencode/plugin/effect`, remove `@opencode/schema`, move `@opencode/plugin` and `effect` to `peerDependencies`, and ship only the built `dist` bundle.
+- Privatize `tokenizeShell` and `createCommitGuardError`, replace test stubs with a typed `Plugin.Context` harness and real captures, and migrate linting and formatting to type-aware Ultracite and Oxfmt.
+
 ## 1.0.7 (2026-11-04)
 
 - Accept heredocs inside command substitutions, so quotes or parentheses in a heredoc body no longer cause a false rejection.
