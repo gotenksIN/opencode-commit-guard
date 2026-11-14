@@ -2,6 +2,13 @@
 
 All notable changes to `opencode-commit-guard` are documented in this file.
 
+## 1.1.1 (2026-11-14)
+
+- Track arithmetic `(( ... ))` and `for (( ... ))` expressions in top-level shell tokenization so left-shift operators cannot enter heredoc mode or hide subsequent commits, and fail closed on dangling `<<` redirects.
+- Validate tool inputs, `commit_context` requests, and structured shell outputs with explicit property type guards instead of `Schema.Json`, allowing omitted or `undefined` optional fields while rejecting unknown option keys in `parseConfig`.
+- Canonicalize shell workdirs with `realpathSync` when claiming pending captures across symlinked paths and frame inaccessible workdir errors with `[commit-guard]`.
+- Consolidate shell scanning, validation, capture import helpers, and test harnesses, and reconcile `CONTEXT.md`, `AGENTS.md`, and `README.md`.
+
 ## 1.1.0 (2026-11-14)
 
 - Preserve original error causes and metadata when appending capture failure guidance in `execute.after`.
