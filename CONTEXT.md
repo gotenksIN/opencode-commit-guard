@@ -1,261 +1,97 @@
-# Architecture specification
+# Project decisions
 
-This document provides the architectural specification for `opencode-commit-guard`.
-Use this specification to recreate or maintain the plugin from first principles.
+## Guard before execution instead of Git hooks
 
-## Domain model
+The plugin validates `git commit` commands in the OpenCode `execute.before` tool hook.
+It rejects a violation through the typed `Tool.Error` channel before the shell runs.
+The agent receives each violation and a conforming example, and the repository stays unchanged.
+Git hooks, Gerrit Change-Id hooks, and repository configuration stay untouched.
+Parallel tool calls settle independently because rejections are typed failures, not Effect defects.
 
-The domain model represents git commit invocations, formatting rules, configuration, and violation diagnostics.
+The guard covers only commits that agents start through the `shell` and `bash` tools.
+It does not verify cryptographic signatures or enforce every writing convention in `AGENTS.md`.
 
-### Configuration
+## Capture Git context on demand
 
-```ts
-export interface CommitGuardConfig {
-  readonly requireScope: boolean;
-  readonly allowedScopes?: readonly string[];
-  readonly maxLineLength: number;
-  readonly enforceSignoff: boolean;
-}
-```
+The `commit_context` tool returns a capture command for the foreground `shell` tool.
+The agent runs that command, so the normal shell permission flow authorizes every read of repository history and configuration.
+The plugin runs no Git commands and reads no repository history or Git configuration on its own.
 
-- `requireScope`: Enforces that the commit subject begins with `<scope>: <subject>`. Defaults to `true`.
-- `allowedScopes`: Optional list of valid scope names. When defined, the extracted scope must match an item in this list. Defaults to `undefined`.
-  An empty array normalizes to `undefined` and disables allowlist checks.
-- `maxLineLength`: Maximum allowed line length across subject and body lines. Defaults to `72`. Setting this to `0` disables length checks.
-- Signoff applies only when a verified baseline records effective `commit.gpgsign=true`.
-  A missing, failed, or stale baseline blocks the commit.
-- `parseConfig` rejects allowed-scope entries that cannot match the validator's shared scope pattern.
-- `parseConfig` rejects unknown option keys and lists the valid options: `requireScope`, `allowedScopes`, and `maxLineLength`.
-- `enforceSignoff` is internal policy, not a plugin option.
-  Validation derives it from the captured signing baseline.
+The capture writes a private owner-only artifact and prints only `RECEIPT_OK`.
+Tool results and model context receive bounded guidance, not complete historical messages.
+The plugin stores a checksum-protected baseline in plugin storage.
+Storage scopes include the project, session, canonical checkout root, workspace, and policy.
+A persisted counter stops a late or stale capture from replacing a refreshed baseline.
 
-### Commit invocation
+Signoff policy derives from the captured effective `commit.gpgsign` value.
+`true` requires a signoff; `false` or unset does not.
+A missing baseline blocks commits, and an unreadable signing setting requires a configuration repair, not another capture.
+The plugin rejects the removed `requireSignoff` option, because signoff follows the captured policy.
 
-```ts
-export interface GitCommitInvocation {
-  readonly messages: readonly string[];
-  readonly filePaths: readonly string[];
-  readonly stdinMessage?: string;
-  readonly stdinError?: string;
-  readonly hasSignoffFlag: boolean;
-  readonly isAmend: boolean;
-  readonly hasNoEdit?: boolean;
-  readonly isFixup?: boolean;
-  readonly isHelp: boolean;
-  readonly targetError?: string;
-  readonly messageExpansion?: boolean;
-  readonly hasTrailer?: boolean;
-}
-```
+## Fail closed on parsing and metadata
 
-- `messages`: Commit message fragments supplied via `-m` or `--message`.
-- `filePaths`: Message files referenced via `-F` or `--file`.
-- `hasSignoffFlag`: `true` when `-s` or `--signoff` was passed; `false` when omitted or explicitly overridden by `--no-signoff`.
-- `isAmend`: `true` when `--amend` was passed.
-- `hasNoEdit` and `isFixup`: Identify unchanged amendments and generated fixup messages.
-- `messageExpansion` and `hasTrailer`: Identify message expansion and `--trailer` input that validation rejects.
-- `isHelp`: `true` when `-h` or `--help` was passed.
-- `targetError`: Describes a directory or Git configuration override that prevents reliable target matching.
-- `stdinMessage` and `stdinError`: Hold a validated quoted heredoc body or an actionable stdin-input rejection.
+The shell parser inspects commands without running them.
+If it cannot prove the command words and message text, it rejects the command.
+Shell expansion in messages, message files, and commit target overrides fail closed.
 
-## Shell command decomposition
+Publication requires shell result metadata of exactly `status: "completed"`, `exit: 0`, and `truncated: false`.
+The plugin rejects other metadata, such as `timeout: true`, `shellID`, `pid`, or `killed`.
+Publication also requires the artifact `END` sentinel.
 
-The shell parser (`src/shell.ts`) inspects shell command strings without spawning child processes.
+This rule handles two OpenCode `v2.4.1` behaviors:
 
-Tokenization stays private; test shell behavior through `extractGitCommits` and `validateGitCommits`.
+- A foreground command that exceeds its timeout moves to the background.
+  Its result has `status: "running"` and a `shellID`, so the capture fails and releases its artifact.
+- A worker restart or daemon loss reports `killed: true` without an exit code.
+  The capture fails instead of trusting a partial artifact.
 
-### 1. Tokenization (`tokenizeShell`)
+## Keep `commit_context` in Code Mode and unpinned
 
-The tokenizer divides the raw command into words, control operators, and redirections:
+`commit_context` stays Code Mode-eligible, and it does not set `pinned: true`.
+Each nested Code Mode tool call has its own call ID.
+Parallel `tools.shell` captures in one script do not collide.
+An unpinned tool keeps non-Git sessions from paying the full catalog token cost.
 
-- Operators: `&&`, `||`, `|&`, `;;`, `;`, `&`, `|`, `\n`, `(`, `)`.
-- Quotes:
-  - Single quotes (`'...'`) preserve all characters literally.
-  - Double quotes (`"..."`) decode `\"`, `\\`, `\$`, and `` \` ``, and remove backslash-newline continuations.
-    They preserve `\n` literally.
-    `${...}` parameters preserve nested quotes, escapes, and parameter defaults without evaluation.
-    Executable `$()` and backtick substitutions inside these parameters fail closed.
-  - ANSI-C quotes (`$'...'`) decode Bash control, hexadecimal, Unicode, and octal escapes, and preserve the backslash on unknown escapes.
-    A trailing `\c` preserves the closing quote; `\c\\` consumes the escaped backslash operand.
-- Concatenation: Adjacent quoted and unquoted fragments (such as `--message="value"`) combine into a single word token.
-- Braces separate commands only as standalone reserved words at command positions; attached braces remain part of their word.
-  Function declarations, `time -p`, and `coproc` also introduce brace groups.
-  Prefix combinations such as `time -p -- !` retain their command position.
-  Brace boundaries ignore backslash-newline continuations.
-- Line continuation: Backslash newline sequences (`\` + `\n`) are discarded.
-- Redirections: File descriptors and redirect operators (`> /dev/null`, `2>&1`, `< file`) are identified and separated from arguments.
-- Tab-stripping heredocs (`<<-`) remove leading tabs from body lines and the closing delimiter.
-- ANSI-C and locale-quoted heredoc delimiters fail closed; use plain quoted delimiters.
-- Unquoted heredocs join backslash-newline continuations before delimiter matching and substitution inspection; quoted heredocs preserve them.
-  Substitution inspection consumes escaped backslash pairs before checking whether a dollar sign is escaped.
-- Message tokens track unquoted and double-quoted expansions without evaluating them.
-- Unterminated quotes fail closed with the quote kind and the position of the opening quote.
-- Unterminated backtick and `$(` substitutions fail closed with their opening position and instructions to close the substitution or quote literal text.
-- All parser and scanner errors start with `[commit-guard]` and identify pre-execution shell inspection as the failing operation.
-  Non-Git failures give command-neutral guidance; Git-specific retry guidance applies only when committing.
+The `full_codemode` shell schema has no `background` field.
+Capture guidance asks for foreground execution in plain words instead of a `background:false` argument.
 
-### 2. Invocation extraction (`extractGitCommits`)
+A top-level call to a Code Mode-only `shell` reaches `execute.before` with `codemode: false` and `execute.after` with `codemode: true`.
+The plugin matches a claimed capture by call ID, message ID, session, and agent, not by `codemode`.
 
-The extraction pipeline identifies git commit commands:
+## Accept the hook-order boundary
 
-1. Splits tokens into simple commands separated by control operators (`&&`, `;`, `||`, `|`, subshells).
-2. Filters out redirect operators and their target paths.
-3. Skips leading environment variable assignments (`VAR=val`).
-4. Skips command execution wrappers (`env`, `exec`, `command`, `builtin`, `nohup`).
-5. Verifies that the command executable is `git`.
-6. Consumes git global options (`-C`, `-c`, `--git-dir`, `--work-tree`, `--no-pager`, etc.).
-7. Confirms that the git subcommand is `"commit"`.
-8. Parses commit flags:
-   - `-m`, `--message`, `--message=` extract message values.
-   - `-F`, `--file`, `--file=` extract message file references.
-   - `-s`, `--signoff`, `--no-signoff` update the signoff flag.
-   - Combined short flags (such as `-sm "..."`, `-sam "..."`, `-m"..."`) are correctly unpacked.
-   - Positional separator `--` terminates flag processing.
-9. Recursively inspects `$()` and backtick substitutions and literal `bash`, `sh`, and `zsh` `-c` bodies.
-   Backticks inside double quotes also remove backslashes that escape double quotes before recursive inspection.
-   Literal `sh -c` bodies containing `$'` fail closed because POSIX shells differ in their support for ANSI-C quotes.
-   Substitution boundaries respect ANSI-C quotes and nested double-quoted parameter defaults.
-   Command-position `case` uses nested header, pattern, and branch states so pattern parentheses do not close the substitution.
-   Patterns accept an optional leading `(` and branches accept `;;`, `;&`, and `;;&`.
-   Commits inside case branches remain subject to recursive extraction and validation.
-   Substitution boundaries queue `<<` and `<<-` heredocs until the next unquoted newline and skip their bodies through each closing delimiter.
-   They use the same delimiter parsing, tab stripping, and unquoted line continuation rules as top-level heredocs.
-   Arithmetic expansions and command-position `((...))` expressions keep left shifts separate from heredoc operators.
-   Quoted bodies remain literal; unquoted bodies retain recursive `$()` inspection and reject backtick substitutions.
-   Literal `case` arguments remain ordinary words.
-   Command positions include the literal `time [-p] [--]` prefix.
-   Function and `coproc` declarations inside substitutions fail closed because their bodies require compound-command parsing.
-   Bounded recursion and incomplete or dynamic shell bodies fail closed with instructions to simplify syntax or use a literal body.
-   Expanded `-c` bodies remain rejected, including `bash -c "FOO=$BAR pytest"` and `bash -c "$SCRIPT"`.
-   Expansion can introduce executable words, so parsing the literal source of an expanded body is insufficient.
-   Dynamic command names also fail closed.
+OpenCode V2 hooks have no priority and run in registration order.
+A later `execute.before` hook can change or rename a call, including a Code Mode call.
+The guard detects the cases that affect a claimed capture:
 
-## Validation engine
+- If a later hook changes the capture command, publication fails.
+- If a later hook renames the capture call away from `shell`, the capture fails and releases its artifact without changing the tool result.
+  This cleanup runs in `execute.after`.
+  If the new name is not an available tool, OpenCode returns an error without running `execute.after`, and the capture stays claimed.
+  In that case, call `commit_context` with `refresh: true` to replace the claimed capture.
 
-The validation engine (`src/validator.ts`) enforces commit format invariants.
+A later plugin that renames another tool to `shell` runs after this guard has inspected the call.
+The guard cannot inspect that call.
 
-### 1. Message assembly
+## Package with external runtime peers
 
-- If multiple `-m` options are given, their values are joined with double newlines (`\n\n`) as separate paragraphs.
-- File-backed references (`-F <file>`, `--file=<file>`) are rejected before shell execution.
-- One complete, quoted heredoc attached directly to descriptor 0 of `git commit -F -` supplies a literal message.
-- Pipelines, multiple heredocs, inherited compound-command input, nonzero descriptors, competing stdin redirects, and unquoted delimiters are rejected for `-F -`.
-- The plugin never reads `-F` or `--file` message files because the pre-execution hook has no permission-checked file access boundary.
-- Messages containing shell expansion are rejected; single quotes and ANSI-C quotes supply literal text.
-- `--trailer` is rejected; use a literal trailer in the message body or `-s`.
-- If no message is provided, the invocation is rejected unless it uses `--amend --no-edit` or a generated fixup message.
-- `git commit --amend --no-edit` without a new message retains the existing message without reading or revalidating repository history.
-- Explicit amendment messages are validated without reading repository history.
+`@opencode/plugin` and `effect` are peer dependencies and stay external in the ESM bundle.
+The plugin then shares the host's `Tool.Error` class and Effect runtime.
+The peer floor is `@opencode/plugin ^2.4.1` and `effect ^4.0.0`.
+`@opencode/core` is a development dependency for tests only and never enters `dist/`.
 
-### 2. Rule evaluation
+## Test through the real OpenCode host
 
-1. **Scope format (`requireScope`)**:
-   - The first line is evaluated against `/^([a-zA-Z0-9_\-./]+(?:\([a-zA-Z0-9_\-./]+\))?):\s+(.+)$/`.
-   - Rejects empty subjects, missing colons, empty scopes, and missing spaces after colons.
-2. **Allowed scopes (`allowedScopes`)**:
-   - Matches the extracted scope against the configured list.
-   - For conventional commits (`type(scope)`), checks the inner scope, the full scope token, and the type prefix.
-3. **Line length (`maxLineLength`)**:
-   - Evaluates every line in the assembled commit text against the maximum line length (default 72).
-   - Records each overlong line with its 1-based index and character count.
-4. **Signoff (captured `commit.gpgsign`)**:
-   - Satisfied if `hasSignoffFlag` is true or if a message-body line contains a valid `Signed-off-by: Name <email>` trailer.
-     The trailer label matches ASCII upper- and lowercase letters only.
+Plugin tests load the plugin into an in-process `@opencode/core` host.
+The host uses real `Tool`, `PluginHooks`, `Shell`, `ShellTool`, `Session`, and `KV` services and runs real shell commands.
+Hand-rolled plugin contexts drift from upstream contracts, so the suite does not use them.
+Host layers change only to isolate state and to control permissions, flags, storage failures, and output limits.
 
-### 3. Error construction
+Pure unit tests cover the shell parser, the validator, and the capture artifact format.
+Tests run concurrently through `bunfig.toml`; tests that patch the clock run serially.
 
-When violations occur, the engine throws an Error with:
+## Keep tooling on the latest release
 
-- A clear rejection header.
-- A numbered list of specific violations with offending text.
-- One single-line example with the first allowed scope (or `scope`), literal `\n` escapes inside `$'...'`, and `-s` only when signoff is required.
-- The captured signoff policy and bounded violation details, without repeating the attempted command.
-
-## OpenCode hook integration
-
-The plugin (`src/plugin.ts`) wires the validation engine to OpenCode's tool execution lifecycle:
-
-- Entrypoint: `Plugin.define` from `@opencode/plugin/effect`.
-- Hook: `ctx.tool.hook("execute.before")` with an Effect callback.
-- Checks if `event.tool` is `"shell"` or `"bash"`.
-- Extracts `command` from `event.input`.
-- Looks up the session only for an exact pending capture command or a non-help commit requiring validation.
-  Each pre-execution hook performs at most one session lookup.
-- Does not read repository history or message files before the shell permission check.
-- Runs `extractGitCommits(command)` and validates all found invocations.
-- Loads a checksum-validated, session-and-worktree-scoped signing baseline from plugin storage.
-- Resolves the baseline before validating message format and signoff once with the captured policy.
-  Help-only invocations do not require a baseline.
-- Rejects missing or invalid baselines, remote workspaces, and commits whose target differs from the captured checkout.
-- Supports Git repositories located at the project root, in subdirectories, or in moved sessions/worktrees.
-- Requires signoff only when the baseline records effective `commit.gpgsign=true`.
-- Validation failures use the typed `Tool.Error` failure channel so parallel calls settle independently without becoming Effect defects.
-
-## Authorized context capture
-
-The on-demand `commit_context` tool returns a Git capture command for the foreground `shell` tool.
-The tool accepts an optional `workdir` (or `directory` alias) parameter to target a repository located in a subdirectory or worktree.
-When omitted in a non-repository directory, it automatically targets a single sub-repository or lists available repositories.
-Run the returned command immediately, unchanged, with its indicated workdir and `background:false`.
-Do not wrap it or chain another command onto it.
-Commit after the shell result reports `Frozen commit baseline` and follow its commit rules.
-If the result lacks that report, call `commit_context` again for status and next steps.
-A second call is optional after inline success.
-Repeat an explicit `workdir` when you check that checkout.
-An argument-free call prioritizes the session directory's repository over a remembered target.
-The plugin creates a private owner-only artifact and retains its file descriptor before returning the command.
-It claims the exact command against the shell tool-call identity before execution.
-The installed V2 shell tool's result metadata uses `status: "completed"`, `exit: 0`, and `truncated: false` for a successful foreground process.
-This is the tool-result status, not `Shell.Info.status`, which uses `exited`.
-A continued background call reports `status: "running"` and `shellID`; a timeout reports `timeout: true` with no exit; a killed call reports an `execute.after` error without result metadata.
-The importer requires the observed successful metadata combination, rejects unrecognized or absent fields, and separately requires the artifact end sentinel.
-It also validates bounded artifact framing, ownership, size, and a final end sentinel through that descriptor.
-An unclaimed attempt has a 20-second admission deadline.
-Once `execute.before` claims it, permission approval and execution do not expire the attempt.
-The host calls `execute.before` before permission approval, not after it.
-The shell command's process timeout and verified result metadata bound execution.
-POSIX capture uses Bash job-control process groups and a portable 15-second watchdog, while retaining `ulimit -f 256`.
-It encodes fields with `base64 | tr -d '\r\n'` rather than GNU-specific options.
-Windows capture uses an encoded Windows PowerShell command that does not depend on the invoking shell's quoting rules.
-It reads Git stdout as raw bytes, preserves NUL separators, and enforces a shared 15-second deadline and a 256 KiB artifact limit.
-Both paths write LF-delimited `CTX1` fields and `END\n`, then print `RECEIPT_OK`.
-Import requires platform-native absolute paths and compares canonical checkout roots.
-Import checks owner-only mode bits on POSIX, not Windows, while retaining descriptor identity and size checks on both platforms.
-Each context or pre-execution call sweeps up to 32 pending entries and removes expired unclaimed artifacts and descriptors.
-The sweep never removes claimed attempts.
-Git reference failures cannot be inferred to mean detached or unborn HEAD; an unborn HEAD requires a readable symbolic reference and a successful status check.
-Only then does it store a checksum-protected snapshot under a unique key.
-The snapshot contains the checkout identity, branch, HEAD, up to ten full messages, and effective signing settings.
-Storage scopes include schema, project, session, canonical checkout root, workspace, and policy revision.
-Captures retain their exact authorized workdir for claim matching, while root and subdirectory calls share baseline identity and refresh invalidation.
-A persisted invalidation counter prevents a late snapshot from replacing a refreshed or cancelled baseline.
-Each prepared attempt reserves a distinct counter under the storage lock, including captures prepared after plugin reload.
-Cleanup compares and increments this counter atomically, only while the attempt still owns it.
-Each scope retains one persisted capture status: prepared, claimed, published, expired, or failed.
-Failure reasons are bounded and explain metadata, artifact, counter, or storage failures on the next context call.
-The plugin also retains up to 128 failure diagnostics in memory if storage fails.
-`RECEIPT_OK` confirms only that the artifact was written, not that the baseline was published.
-The plugin appends one bounded outcome note to claimed capture results, preserving the original content parts and metadata.
-It also appends that note to the structured shell output so Code Mode receives it.
-A failed tool call retains its original error payload and metadata with the failure note appended to its message.
-The context tool and inline success share identical checkout-root guidance and captured signoff instructions.
-An invalid signing setting produces repair guidance instead of another capture command.
-Inspect its origin, fix the value without changing the intended signing policy, then request `refresh:true`.
-The tool returns only bounded guidance and observed scope examples, never complete historical messages.
-Refresh the frozen baseline after a branch switch, signing setting change, or changed commit instructions.
-The plugin does not detect configuration changes or repository replacement at the same path without another authorized capture.
-The guard does not verify cryptographic signatures or enforce all writing conventions in `AGENTS.md`.
-The OC-1 proposal to mark `commit_context` with `codemode: false` is deferred and is not implemented.
-Code Mode access retains the same capture admission and publication requirements.
-
-## Packaging and runtime invariants
-
-- Package uses ECMAScript Modules (`"type": "module"`).
-- `@opencode/plugin` and `effect` are peer dependencies with compatible version ranges.
-- Development targets the latest `@opencode/plugin` and pins `effect` to its transitive version to keep one Effect runtime and compatible types.
-- Import `Plugin` and `Tool` from `@opencode/plugin/effect`; the package does not depend directly on `@opencode/schema`.
-- The package exports only `.` through `./dist/index.js` and distributes only `dist`, apart from standard package metadata and documentation.
-- The ESM distribution bundle keeps OpenCode and Effect runtime packages external so it uses the host's typed failure classes and Effect runtime.
-- Oxlint uses Ultracite core and anti-slop presets with type-aware checks.
-- Permit intentional bitwise AND and OR only in shell escape decoding and capture artifact handling.
-- Oxfmt uses the Ultracite preset with semantic Markdown line breaks and excludes generated `dist` files.
+Development dependencies on `@opencode/core`, `@opencode/plugin`, `ultracite`, `oxlint`, `oxlint-tsgolint`, and `oxfmt` use `latest`.
+`bun.lock` records the resolved versions.
+Type-aware Oxlint with the Ultracite core and anti-slop presets, and Oxfmt, gate every change.
