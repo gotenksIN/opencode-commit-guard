@@ -81,6 +81,11 @@ const unusedDomains = {
       "decisions",
     ]),
     artifact: domainMethods("experimental.artifact", ["transform", "reload"]),
+    automation: domainMethods("experimental.automation", [
+      "create",
+      "list",
+      "delete",
+    ]),
   },
   generate: { text: unused("generate.text") },
   integration: {
@@ -410,6 +415,7 @@ const setupTestPlugin = async function setupTestPlugin(
         await Effect.runPromise(
           hook({
             ...toolContext,
+            codemode: false,
             tool,
             input,
             id: Tool.CallID.make("call"),
@@ -436,6 +442,7 @@ const setupTestPlugin = async function setupTestPlugin(
       await Effect.runPromise(
         hook({
           ...toolContext,
+          codemode: false,
           tool: "shell",
           input: { command, workdir },
         })
@@ -457,6 +464,7 @@ const setupTestPlugin = async function setupTestPlugin(
 
       const event: HookEvent = {
         ...toolContext,
+        codemode: false,
         tool: "shell",
         input: { command, workdir: directory },
         id: Tool.CallID.make(id),
@@ -480,6 +488,7 @@ const setupTestPlugin = async function setupTestPlugin(
 
       const event: HookEvent = {
         ...toolContext,
+        codemode: false,
         tool: "shell",
         input: { command, workdir: directory },
         status: "error",

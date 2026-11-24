@@ -30,17 +30,18 @@
     "prepack": "bun run build"
   },
   "devDependencies": {
+    "@opencode/core": "latest",
     "@opencode/plugin": "latest",
     "@types/bun": "1.4.4",
     "effect": "4.1.0",
-    "oxfmt": "^0.78.0",
-    "oxlint": "^1.93.0",
-    "oxlint-tsgolint": "^7.0.2007",
+    "oxfmt": "latest",
+    "oxlint": "latest",
+    "oxlint-tsgolint": "latest",
     "typescript": "7.0.2",
-    "ultracite": "^8.2.0"
+    "ultracite": "latest"
   },
   "peerDependencies": {
-    "@opencode/plugin": "^2.3.0",
+    "@opencode/plugin": "^2.4.1",
     "effect": "^4.0.0"
   },
   "engines": {
