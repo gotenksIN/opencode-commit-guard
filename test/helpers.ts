@@ -13,7 +13,9 @@ export const createTempRepo = (
   teardown.push(() => {
     rmSync(directory, { recursive: true, force: true });
   });
-  expect(Bun.spawnSync(["git", "init", "-q", directory]).exitCode).toBe(0);
+  expect(
+    Bun.spawnSync(["git", "init", "-q", "--template=", directory]).exitCode
+  ).toBe(0);
 
   if (signing !== undefined) {
     expect(
@@ -99,6 +101,7 @@ export const expectRejects = async <T>(
   }, expected);
 };
 
+/** Patches the global `Date.now`; run callers with `test.serial`. */
 export const withFakeNow = async (
   run: (advance: (milliseconds: number) => void) => Promise<void>
 ): Promise<void> => {
