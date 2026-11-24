@@ -118,7 +118,7 @@ const baselineGuidance = (
 };
 
 const captureInstructions = (attempt: Pending, status: string): string =>
-  `${status}Run this shell command immediately, unchanged, in the foreground with workdir ${attempt.workdir} and background:false. ` +
+  `${status}Run this shell command immediately, unchanged, in the foreground with workdir ${attempt.workdir} (do not run it in the background). ` +
   `Do not wrap it or chain another command onto it. ${publicationGuidance} ${receiptGuidance}\n${attempt.command}`;
 
 const sweep = (state: GuardState) =>
@@ -431,7 +431,7 @@ const verifyBaselineAndValidate = (
 
       return yield* Effect.fail(
         new Error(
-          `[commit-guard] No published baseline for ${expected}. Call commit_context({ workdir: ${hint} }), then run the returned command immediately, unchanged, in the foreground with that workdir and background:false. Do not wrap it or chain another command onto it. ${publicationGuidance} RECEIPT_OK alone is insufficient.`
+          `[commit-guard] No published baseline for ${expected}. Call commit_context({ workdir: ${hint} }), then run the returned command immediately, unchanged, in the foreground with that workdir (do not run it in the background). Do not wrap it or chain another command onto it. ${publicationGuidance} RECEIPT_OK alone is insufficient.`
         )
       );
     }
@@ -532,6 +532,10 @@ const publishCapturedAttempt = (
   Effect.gen(function* publishAttempt() {
     const { ctx } = state;
 
+    if (!isRecord(event.input) || event.input.command !== attempt.command) {
+      return "claimed capture command was modified before execution";
+    }
+
     if (event.status !== "completed") {
       return "shell result did not complete successfully";
     }
@@ -622,12 +626,34 @@ const rememberFailure = (
   }
 };
 
-const handleAfterExecute = (state: GuardState, event: AfterEvent) =>
-  Effect.gen(function* after() {
-    if (event.tool !== "shell") {
-      return;
+const finalizeAttempt = (
+  state: GuardState,
+  attempt: Pending,
+  outcome: Baseline | string
+) =>
+  Effect.gen(function* finalize() {
+    if (state.pending.get(attempt.scope) === attempt) {
+      state.pending.delete(attempt.scope);
     }
 
+    if (isJSONString(outcome)) {
+      rememberFailure(state, attempt.scope, outcome);
+      yield* recordState(state.ctx, attempt, "failed", outcome).pipe(
+        Effect.catchCause(() => Effect.void)
+      );
+      yield* invalidateOwned(state.ctx, attempt);
+    }
+  }).pipe(
+    Effect.ensuring(
+      Effect.sync(() => {
+        cleanup(attempt);
+      })
+    ),
+    Effect.catchCause(() => Effect.void)
+  );
+
+const handleAfterExecute = (state: GuardState, event: AfterEvent) =>
+  Effect.gen(function* after() {
     const attempt = [...state.pending.values()].find(
       (item) =>
         item.claimed?.id === event.id &&
@@ -640,6 +666,16 @@ const handleAfterExecute = (state: GuardState, event: AfterEvent) =>
       return;
     }
 
+    if (event.tool !== "shell") {
+      yield* finalizeAttempt(
+        state,
+        attempt,
+        "claimed capture tool was renamed away from shell"
+      );
+
+      return;
+    }
+
     let outcome: Baseline | string = "capture import or storage failed";
 
     yield* Effect.gen(function* publishing() {
@@ -649,28 +685,7 @@ const handleAfterExecute = (state: GuardState, event: AfterEvent) =>
         yield* recordState(state.ctx, attempt, "published");
       }
     }).pipe(
-      Effect.onExit(() =>
-        Effect.gen(function* finalize() {
-          if (state.pending.get(attempt.scope) === attempt) {
-            state.pending.delete(attempt.scope);
-          }
-
-          if (isJSONString(outcome)) {
-            rememberFailure(state, attempt.scope, outcome);
-            yield* recordState(state.ctx, attempt, "failed", outcome).pipe(
-              Effect.catchCause(() => Effect.void)
-            );
-            yield* invalidateOwned(state.ctx, attempt);
-          }
-        }).pipe(
-          Effect.ensuring(
-            Effect.sync(() => {
-              cleanup(attempt);
-            })
-          ),
-          Effect.catchCause(() => Effect.void)
-        )
-      ),
+      Effect.onExit(() => finalizeAttempt(state, attempt, outcome)),
       Effect.catchCause(() => Effect.void)
     );
 
@@ -727,7 +742,7 @@ export const plugin = Plugin.define({
           description: String.raw`Prepare a Git baseline. Run the returned command unchanged in the foreground; require "Frozen commit baseline".
 Call before your first commit in each session and checkout.
 Set workdir when targeting another repository.
-Run the returned command immediately, unchanged, with the indicated workdir and background:false.
+Run the returned command immediately, unchanged, in the foreground with the indicated workdir (do not run it in the background).
 Do not wrap it or chain another command onto it.
 ${publicationGuidance} ${receiptGuidance}
 The shell result includes commit rules; a second call is optional.
