@@ -2,6 +2,14 @@
 
 All notable changes to `opencode-commit-guard` are documented in this file.
 
+## 1.1.2 (2026-11-24)
+
+- Target OpenCode `v2.4.1`, raise the `@opencode/plugin` peer floor to `^2.4.1`, and keep Ultracite, Oxlint, and Oxfmt devDependencies on `latest`.
+- Drop the `background:false` requirement from foreground capture instructions for `full_codemode` compatibility.
+- Harden claimed capture handling in `execute.after` and publication checks when a later `execute.before` hook renames the tool or mutates `command`.
+- Replace hand-rolled plugin host stubs in `test/plugin.test.ts` with an in-process `@opencode/core` host (`test/host.ts`), expand `full_codemode` and real shell failure tests, and run test cases concurrently (`bunfig.toml`).
+- Rewrite `README.md` as a concise introduction, reduce `CONTEXT.md` to project decisions, and remove duplicated global rules from `AGENTS.md`.
+
 ## 1.1.1 (2026-11-14)
 
 - Track arithmetic `(( ... ))` and `for (( ... ))` expressions in top-level shell tokenization so left-shift operators cannot enter heredoc mode or hide subsequent commits, and fail closed on dangling `<<` redirects.
