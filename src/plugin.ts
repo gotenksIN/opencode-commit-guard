@@ -3,10 +3,11 @@ import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 
 import { Plugin, Tool } from "@opencode/plugin/effect";
-import { Cause, Effect } from "effect";
+import { Cause, Clock, Effect } from "effect";
 
 import {
   captureStatus,
+  captureTimeout,
   cleanup,
   counter,
   createPending,
@@ -42,9 +43,11 @@ type AfterEvent = Extract<HookEvent, { status: string }>;
 
 interface GuardState {
   ctx: Plugin.Context;
+  clock: Clock.Clock;
   config: CommitGuardConfig;
   generation: string;
   pending: Map<string, Pending>;
+  recentExpired: Set<string>;
   preparing: Set<string>;
   lastSessionWorkdir: Map<string, string>;
   failures: Map<string, string>;
@@ -121,12 +124,34 @@ const captureInstructions = (attempt: Pending, status: string): string =>
   `${status}Run this shell command immediately, unchanged, in the foreground with workdir ${attempt.workdir} (do not run it in the background). ` +
   `Do not wrap it or chain another command onto it. ${publicationGuidance} ${receiptGuidance}\n${attempt.command}`;
 
+const rememberExpired = (state: GuardState, command: string): void => {
+  const trimmed = command.trim();
+  state.recentExpired.delete(trimmed);
+  state.recentExpired.add(trimmed);
+
+  if (state.recentExpired.size > 64) {
+    const oldest = state.recentExpired.values().next().value;
+
+    if (oldest !== undefined) {
+      state.recentExpired.delete(oldest);
+    }
+  }
+};
+
+const expiredCaptureError = (): Error =>
+  new Error(
+    "[commit-guard] This commit_context capture command expired after 20 seconds before it was claimed. Call commit_context right before committing and run the returned command immediately, unchanged, in the foreground."
+  );
+
 const sweep = (state: GuardState) =>
   Effect.gen(function* sweepPending() {
+    const now = yield* state.clock.currentTimeMillis;
+
     for (const attempt of [...state.pending.values()].slice(0, 32)) {
       state.pending.delete(attempt.scope);
 
-      if (attempt.claimed === undefined && Date.now() >= attempt.expires) {
+      if (attempt.claimed === undefined && now >= attempt.expires) {
+        rememberExpired(state, attempt.command);
         cleanup(attempt);
         yield* recordState(state.ctx, attempt, "expired");
         yield* invalidateOwned(state.ctx, attempt);
@@ -188,18 +213,24 @@ const prepareCapture = (
 ) =>
   Effect.gen(function* prepare() {
     const { ctx, pending, config } = state;
+    const now = yield* state.clock.currentTimeMillis;
     const previous = pending.get(scope);
 
     if (previous !== undefined) {
-      if (request.refresh !== true) {
+      if (request.refresh !== true && previous.claimed !== undefined) {
         return {
-          content:
-            previous.claimed === undefined
-              ? captureInstructions(
-                  previous,
-                  "Capture still pending and unclaimed. "
-                )
-              : `Capture claimed; permission approval or execution is pending. Wait for its foreground shell result. ${publicationGuidance} ${receiptGuidance}`,
+          content: `Capture claimed; permission approval or execution is pending. Wait for its foreground shell result. ${publicationGuidance} ${receiptGuidance}`,
+        };
+      }
+
+      if (request.refresh !== true && previous.workdir === workdir) {
+        previous.expires = now + captureTimeout;
+
+        return {
+          content: captureInstructions(
+            previous,
+            "Capture still pending and unclaimed. "
+          ),
         };
       }
 
@@ -209,7 +240,9 @@ const prepareCapture = (
         ctx,
         previous,
         "failed",
-        "capture replaced by refresh"
+        request.refresh === true
+          ? "capture replaced by refresh"
+          : "capture replaced by workdir change"
       );
       yield* invalidateOwned(ctx, previous);
     }
@@ -233,7 +266,10 @@ const prepareCapture = (
         toolContext.sessionID,
         toolContext.agent,
         count,
-        workdir
+        workdir,
+        15,
+        process.platform,
+        now
       )
     );
 
@@ -333,6 +369,43 @@ const runCommitContext = (
     );
   }).pipe(Effect.mapError(toToolError));
 
+const claimMismatchReason = (
+  event: BeforeEvent,
+  input: Record<string, JsonValue | undefined>,
+  attempt: Pending,
+  sessionDirectory: string
+): string | undefined => {
+  if (event.tool !== "shell") {
+    return `tool "${event.tool}" is not "shell"`;
+  }
+
+  if (event.sessionID !== attempt.sessionID || event.agent !== attempt.agent) {
+    return "session or agent does not match the original commit_context call";
+  }
+
+  if (input.background === true) {
+    return "background: true is not allowed; run the capture in the foreground";
+  }
+
+  if (attempt.claimed !== undefined) {
+    return "capture was already claimed";
+  }
+
+  let resolvedWorkdir: string | undefined;
+
+  try {
+    resolvedWorkdir = resolveCanonicalWorkdir(sessionDirectory, input.workdir);
+  } catch {
+    return `shell workdir is inaccessible; expected ${attempt.workdir}`;
+  }
+
+  if (resolvedWorkdir !== attempt.workdir) {
+    return `resolved workdir ${resolvedWorkdir} does not match expected workdir ${attempt.workdir}`;
+  }
+
+  return undefined;
+};
+
 const claimCapture = (
   state: GuardState,
   event: BeforeEvent,
@@ -340,39 +413,39 @@ const claimCapture = (
   attempt: Pending
 ) =>
   Effect.gen(function* claim() {
+    const now = yield* state.clock.currentTimeMillis;
+
+    if (attempt.claimed === undefined && now >= attempt.expires) {
+      state.pending.delete(attempt.scope);
+      rememberExpired(state, attempt.command);
+      cleanup(attempt);
+      yield* recordState(state.ctx, attempt, "expired");
+      yield* invalidateOwned(state.ctx, attempt);
+      yield* Effect.fail(expiredCaptureError());
+
+      return;
+    }
+
     const session = yield* state.ctx.session.get({
       sessionID: event.sessionID,
     });
 
-    yield* Effect.try(() => {
-      let matchesWorkdir = false;
+    const sessionDirectory =
+      session.location.directory ?? state.ctx.location.directory;
 
-      try {
-        matchesWorkdir =
-          resolveCanonicalWorkdir(
-            session.location.directory ?? state.ctx.location.directory,
-            input.workdir
-          ) === attempt.workdir;
-      } catch {
-        // A missing or inaccessible path cannot claim a capture.
-      }
+    const reason = claimMismatchReason(event, input, attempt, sessionDirectory);
 
-      if (
-        event.tool !== "shell" ||
-        event.sessionID !== attempt.sessionID ||
-        event.agent !== attempt.agent ||
-        !matchesWorkdir ||
-        input.background === true ||
-        Date.now() >= attempt.expires ||
-        attempt.claimed !== undefined
-      ) {
-        throw new Error(
-          "[commit-guard] Capture must use its exact foreground shell command in the original session and workdir. Call commit_context to refresh."
-        );
-      }
+    if (reason !== undefined) {
+      yield* Effect.fail(
+        new Error(
+          `[commit-guard] Capture must use its exact foreground shell command in the original session and workdir (${reason}). Call commit_context with refresh: true.`
+        )
+      );
 
-      attempt.claimed = { messageID: event.messageID, id: event.id };
-    });
+      return;
+    }
+
+    attempt.claimed = { messageID: event.messageID, id: event.id };
     yield* recordState(state.ctx, attempt, "claimed");
   });
 
@@ -491,6 +564,34 @@ const handleBeforeExecute = (state: GuardState, event: BeforeEvent) =>
       return;
     }
 
+    const trimmed = command.trim();
+
+    const modified = [...state.pending.values()].find(
+      (item) =>
+        item.command.trim() === trimmed ||
+        command.includes(item.command) ||
+        command.includes(item.artifactPath)
+    );
+
+    if (modified !== undefined) {
+      yield* Effect.fail(
+        new Error(
+          "[commit-guard] Capture command was modified, wrapped, or chained. Run the exact command returned by commit_context unchanged in the foreground, or call commit_context({ refresh: true })."
+        )
+      );
+
+      return;
+    }
+
+    if (
+      state.recentExpired.has(trimmed) ||
+      [...state.recentExpired].some((expired) => command.includes(expired))
+    ) {
+      yield* Effect.fail(expiredCaptureError());
+
+      return;
+    }
+
     const invocations = yield* Effect.try(() => extractGitCommits(command));
 
     if (
@@ -507,6 +608,13 @@ const handleBeforeExecute = (state: GuardState, event: BeforeEvent) =>
     }
   }).pipe(Effect.mapError(toToolError));
 
+const allowedMetadataKeys = new Set(["status", "exit", "truncated", "timeout"]);
+
+const unexpectedMetadataKeys = (
+  metadata: Record<string, JsonValue | undefined>
+): string[] =>
+  Object.keys(metadata).filter((key) => !allowedMetadataKeys.has(key));
+
 const isVerifiedShellMetadata = (
   metadata: unknown
 ): metadata is {
@@ -520,9 +628,7 @@ const isVerifiedShellMetadata = (
   metadata.exit === 0 &&
   metadata.truncated === false &&
   (metadata.timeout === undefined || metadata.timeout === false) &&
-  Object.keys(metadata).every((key) =>
-    ["status", "exit", "truncated", "timeout"].includes(key)
-  );
+  unexpectedMetadataKeys(metadata).length === 0;
 
 const publishCapturedAttempt = (
   state: GuardState,
@@ -545,7 +651,13 @@ const publishCapturedAttempt = (
     }
 
     if (!isVerifiedShellMetadata(event.result.metadata)) {
-      return "shell result lacks verified foreground completion metadata";
+      const unexpected = isRecord(event.result.metadata)
+        ? unexpectedMetadataKeys(event.result.metadata)
+        : [];
+
+      return unexpected.length > 0
+        ? `shell result lacks verified foreground completion metadata (unexpected keys: ${unexpected.join(", ")})`
+        : "shell result lacks verified foreground completion metadata";
     }
 
     const session = yield* Effect.orElseSucceed(
@@ -572,8 +684,10 @@ const publishCapturedAttempt = (
       return "private artifact is invalid or incomplete (END required)";
     }
 
+    const now = yield* state.clock.currentTimeMillis;
+
     if (
-      !(yield* publish(ctx, attempt, state.generation, baseline).pipe(
+      !(yield* publish(ctx, attempt, state.generation, baseline, now).pipe(
         Effect.catchCause(() => Effect.succeed(false))
       ))
     ) {
@@ -709,12 +823,15 @@ export const plugin = Plugin.define({
   effect: (ctx) =>
     Effect.gen(function* setup() {
       const config = yield* Effect.sync(() => parseConfig(ctx.options));
+      const clock = yield* Clock.Clock;
 
       const state: GuardState = {
         ctx,
+        clock,
         config,
         generation: randomUUID(),
         pending: new Map(),
+        recentExpired: new Set(),
         preparing: new Set(),
         lastSessionWorkdir: new Map(),
         failures: new Map(),

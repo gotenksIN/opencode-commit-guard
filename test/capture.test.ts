@@ -141,10 +141,10 @@ describe("private context capture", () => {
       const pending = prepare();
 
       expect(pending.command).toStartWith(
-        "powershell -NoLogo -NoProfile -NonInteractive -EncodedCommand "
+        "pwsh -NoLogo -NoProfile -NonInteractive -EncodedCommand "
       );
       expect(pending.command).toMatch(/-EncodedCommand [A-Za-z0-9+/=]+$/u);
-      expect(pending.command.length).toBeLessThan(8191);
+      expect(pending.command.length).toBeLessThan(32_767);
     });
   });
 

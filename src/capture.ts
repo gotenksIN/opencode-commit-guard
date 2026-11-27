@@ -14,7 +14,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
-import { gzipSync } from "node:zlib";
 
 import type { Plugin } from "@opencode/plugin/effect";
 import { Effect, Semaphore } from "effect";
@@ -28,7 +27,7 @@ const version = 1;
 
 const maxBytes = 262_144;
 
-const captureTimeout = 20_000;
+export const captureTimeout = 20_000;
 
 const policy = "commit-guard-context-v1";
 
@@ -51,6 +50,7 @@ export interface Baseline {
 export interface Pending {
   readonly scope: string;
   readonly command: string;
+  readonly artifactPath: string;
   readonly directory: string;
   readonly workdir: string;
   readonly fd: number;
@@ -435,9 +435,13 @@ export const load = (
   );
 
 // Each line is a base64-encoded Git result. No Git output enters the shell result.
-const captureCommand = (path: string, watchdogSeconds: number): string => {
-  if (process.platform === "win32") {
-    return windowsCaptureCommand(path);
+const captureCommand = (
+  path: string,
+  watchdogSeconds: number,
+  platform: NodeJS.Platform
+): string => {
+  if (platform === "win32") {
+    return windowsCaptureCommand(path, watchdogSeconds);
   }
 
   const quoted = `'${path.replaceAll("'", "'\\''")}'`;
@@ -477,8 +481,12 @@ wait "$watchdog" 2>/dev/null
 exit "$status"' bash '${script.replaceAll("'", "'\\''")}' ${quoted} 2>/dev/null`;
 };
 
-const windowsCaptureCommand = (path: string): string => {
-  // EncodedCommand avoids quoting differences between cmd, PowerShell, and Git Bash.
+const windowsCaptureCommand = (
+  path: string,
+  watchdogSeconds: number
+): string => {
+  const watchdogMs = Math.round(watchdogSeconds * 1000);
+
   const script = `$ErrorActionPreference = 'Stop'
 $clock = [Diagnostics.Stopwatch]::StartNew()
 $lines = [Collections.Generic.List[string]]::new()
@@ -492,24 +500,26 @@ function gitResult([string]$arguments) {
   $p = [Diagnostics.Process]::new()
   $p.StartInfo = $info
   $memory = [IO.MemoryStream]::new()
+  $started = $false
   try {
-    if (!$p.Start()) { throw 'Git did not start' }
+    $started = $p.Start()
+    if (!$started) { throw 'Git did not start' }
     $p.BeginErrorReadLine()
     $buffer = [byte[]]::new(4096)
     while ($true) {
       $task = $p.StandardOutput.BaseStream.ReadAsync($buffer, 0, $buffer.Length)
-      $remaining = 15000 - [int]$clock.ElapsedMilliseconds
+      $remaining = ${watchdogMs} - [int]$clock.ElapsedMilliseconds
       if ($remaining -le 0 -or !$task.Wait($remaining)) { throw 'Capture timed out' }
       $count = $task.Result
       if ($count -eq 0) { break }
       if ($memory.Length + $count -gt ${maxBytes}) { throw 'Capture exceeds size limit' }
       $memory.Write($buffer, 0, $count)
     }
-    $remaining = 15000 - [int]$clock.ElapsedMilliseconds
+    $remaining = ${watchdogMs} - [int]$clock.ElapsedMilliseconds
     if ($remaining -le 0 -or !$p.WaitForExit($remaining)) { throw 'Capture timed out' }
     return @{ Code = $p.ExitCode; Bytes = $memory.ToArray() }
   } finally {
-    if ($p.Id -and !$p.HasExited) { & taskkill.exe /PID $p.Id /T /F > $null 2>&1 }
+    if ($started -and !$p.HasExited) { try { $p.Kill($true) } catch {} }
     $p.Dispose()
     $memory.Dispose()
   }
@@ -542,18 +552,14 @@ try {
   }
   $lines.Add('END')
   $bytes = [Text.Encoding]::UTF8.GetBytes(($lines -join "\`n") + "\`n")
-  if ($bytes.Length -gt ${maxBytes} -or $clock.ElapsedMilliseconds -ge 15000) { throw 'Capture exceeds limits' }
+  if ($bytes.Length -gt ${maxBytes} -or $clock.ElapsedMilliseconds -ge ${watchdogMs}) { throw 'Capture exceeds limits' }
   $path = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(path).toString("base64")}'))
   $file = [IO.FileStream]::new($path, [IO.FileMode]::Truncate, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
   try { $file.Write($bytes, 0, $bytes.Length) } finally { $file.Dispose() }
   [Console]::Write("RECEIPT_OK\`n")
 } catch { exit 1 }`;
 
-  // Compress the script to stay below cmd.exe's 8191-character command limit.
-  const compressed = gzipSync(Buffer.from(script)).toString("base64");
-  const bootstrap = `$m = [IO.MemoryStream]::new([Convert]::FromBase64String('${compressed}')); $g = [IO.Compression.GZipStream]::new($m, [IO.Compression.CompressionMode]::Decompress); $r = [IO.StreamReader]::new($g, [Text.Encoding]::UTF8); try { Invoke-Expression $r.ReadToEnd() } finally { $r.Dispose(); $g.Dispose(); $m.Dispose() }`;
-
-  return `powershell -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(bootstrap, "utf16le").toString("base64")}`;
+  return `pwsh -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, "utf16le").toString("base64")}`;
 };
 
 export const createPending = (
@@ -562,7 +568,9 @@ export const createPending = (
   agent: string,
   counterValue: number,
   workdir: string,
-  watchdogSeconds = 15
+  watchdogSeconds = 15,
+  platform: NodeJS.Platform = process.platform,
+  now = 0
 ): Pending => {
   const directory = mkdtempSync(join(tmpdir(), "commit-context-"));
 
@@ -585,12 +593,13 @@ export const createPending = (
       sessionID,
       agent,
       counter: counterValue,
+      artifactPath: file,
       directory,
       workdir,
       fd,
       identity: { dev: stat.dev, ino: stat.ino, uid: stat.uid },
-      expires: Date.now() + captureTimeout,
-      command: captureCommand(file, watchdogSeconds),
+      expires: now + captureTimeout,
+      command: captureCommand(file, watchdogSeconds, platform),
     };
   } catch (error) {
     rmSync(directory, { recursive: true, force: true });
@@ -620,7 +629,10 @@ const decode = (line: string): string => {
   return Buffer.from(line, "base64").toString("utf-8");
 };
 
-const readCaptureArtifact = (pending: Pending): string[] => {
+const readCaptureArtifact = (
+  pending: Pending,
+  platform: NodeJS.Platform = process.platform
+): string[] => {
   const stat = fstatSync(pending.fd);
 
   if (
@@ -628,7 +640,7 @@ const readCaptureArtifact = (pending: Pending): string[] => {
     stat.dev !== pending.identity.dev ||
     stat.ino !== pending.identity.ino ||
     stat.uid !== pending.identity.uid ||
-    (process.platform !== "win32" && (stat.mode & 0o777) !== 0o600) ||
+    (platform !== "win32" && (stat.mode & 0o777) !== 0o600) ||
     stat.size > maxBytes ||
     stat.size === 0
   ) {
@@ -698,8 +710,11 @@ const assertBaselineIdentity = (
   }
 };
 
-export const importCapture = (pending: Pending): Baseline => {
-  const fields = readCaptureArtifact(pending);
+export const importCapture = (
+  pending: Pending,
+  platform: NodeJS.Platform = process.platform
+): Baseline => {
+  const fields = readCaptureArtifact(pending, platform);
   const rawRoot = decode(fields[1] ?? "").trimEnd();
   const root = isAbsolute(rawRoot) ? realpathSync(resolve(rawRoot)) : rawRoot;
   const gitDir = decode(fields[2] ?? "").trimEnd();
@@ -747,7 +762,8 @@ export const publish = (
   ctx: Context,
   pending: Pending,
   generation: string,
-  baseline: Baseline
+  baseline: Baseline,
+  now: number
 ): Effect.Effect<boolean> =>
   storageLock.withPermits(1)(
     Effect.gen(function* writeBaseline() {
@@ -755,7 +771,7 @@ export const publish = (
         return false;
       }
 
-      const sequence = `${Date.now().toString().padStart(15, "0")}-${randomUUID()}`;
+      const sequence = `${now.toString().padStart(15, "0")}-${randomUUID()}`;
 
       const checksum = snapshotChecksum(
         pending.scope,

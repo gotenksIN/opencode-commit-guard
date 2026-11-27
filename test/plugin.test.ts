@@ -367,7 +367,7 @@ describe("normal mode capture", () => {
       expect(instructions).toContain(publicationGuidance);
       await rejects(
         shell(host, `${command} `, directory),
-        "Pre-execution shell inspection failed"
+        "Capture command was modified, wrapped, or chained"
       );
       expect(await context(host)).toContain("still pending and unclaimed");
       expect(await context(host)).toContain(
@@ -384,11 +384,13 @@ describe("normal mode capture", () => {
 
       expect(text(unrelated)).not.toContain("[commit-guard]");
       held.release();
-      expect(text(await running)).toContain(failureNote(unverified));
+      const timedOutReason = `${unverified} (unexpected keys: shellID, pid)`;
+
+      expect(text(await running)).toContain(failureNote(timedOutReason));
       await host.unload();
       await host.reload();
       expect(await context(host)).toStartWith(
-        `The previous capture failed: ${unverified}. Run this shell command`
+        `The previous capture failed: ${timedOutReason}. Run this shell command`
       );
     }),
     timeout
@@ -457,7 +459,9 @@ describe("capture failure paths", () => {
 
       expect(result.metadata?.status).toBe("running");
       expect(result.metadata?.shellID).toBeString();
-      expect(text(result)).toContain(failureNote(unverified));
+      expect(text(result)).toContain(
+        failureNote(`${unverified} (unexpected keys: shellID, pid)`)
+      );
       expect(await context(host)).toContain(
         `previous capture failed: ${unverified}`
       );
@@ -494,14 +498,16 @@ describe("capture failure paths", () => {
     {
       name: "killed metadata without an exit code",
       metadata: { status: "completed", truncated: false, killed: true },
+      unexpectedKeys: "killed",
     },
     {
       name: "an unexpected metadata key",
       metadata: { status: "completed", truncated: false, exit: 0, extra: 1 },
+      unexpectedKeys: "extra",
     },
   ])(
     "rejects $name",
-    async ({ metadata }) => {
+    async ({ metadata, unexpectedKeys }) => {
       await withFixture(async ({ repo, host: start }) => {
         const directory = repo();
 
@@ -522,7 +528,9 @@ describe("capture failure paths", () => {
         const result = await capture(host, directory);
 
         expect(result.metadata).toEqual(metadata);
-        expect(text(result)).toContain(failureNote(unverified));
+        expect(text(result)).toContain(
+          failureNote(`${unverified} (unexpected keys: ${unexpectedKeys})`)
+        );
         await rejects(
           shell(host, "git commit -s -m 'core: Subject'", directory),
           "No published baseline"
