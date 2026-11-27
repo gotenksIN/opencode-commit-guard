@@ -2,6 +2,13 @@
 
 All notable changes to `opencode-commit-guard` are documented in this file.
 
+## 1.2.0 (2026-11-27)
+
+- Target PowerShell 7 (`pwsh`) exclusively on Windows for context capture: generate uncompressed UTF-16LE `pwsh -NoLogo -NoProfile -NonInteractive -EncodedCommand` scripts, drop `powershell.exe`, `cmd.exe`, `gzip`, `Invoke-Expression`, and `taskkill.exe`, parameterize `watchdogSeconds`, and terminate child process trees with guarded `$p.Kill($true)`.
+- Add PowerShell 7 (`pwsh`) command parsing in `src/shell.ts` and automatic `using pwsh.` shell mode detection in `src/plugin.ts`, supporting PowerShell quotes, smart quotes, backtick escapes, line/block comments, here-strings (including single-stage `@'...'@ | git commit -F -` stdin pipelines), subexpressions, call operators, target mutators, nested `pwsh`/`-EncodedCommand` unwrapping across POSIX and `pwsh` modes, and fail-closed splatting, `& $cmd`, `-File`, and invalid base64 handling.
+- Replace `Date.now()` with Effect `Clock.Clock` captured on `GuardState`, pass `platform` explicitly to capture helpers, track recently expired capture commands and modified live captures before shell parsing, add specific `claimCapture` mismatch diagnostics with `refresh: true` guidance, refresh unclaimed expiry or replace unclaimed captures on `workdir` change within the same Git root, and report unexpected shell metadata key names.
+- Enable `ultracite/oxlint/landmines` at `error` (with temporary `"@interfere/landmines": "0.1.1"` pin), align `tsconfig.json` (`NodeNext`, `noUncheckedIndexedAccess`), raise `engines.bun` to `>=1.4.0`, expand `scripts.check` to run typecheck and tests, colocate unit tests beside source modules, switch fake-clock tests to concurrent plugin-scoped `TestClock`, replace `Bun.sleep` polling with `sessions.wait`, and add live `pwsh` capture, watchdog, and host E2E tests.
+
 ## 1.1.2 (2026-11-24)
 
 - Target OpenCode `v2.4.1`, raise the `@opencode/plugin` peer floor to `^2.4.1`, and keep Ultracite, Oxlint, and Oxfmt devDependencies on `latest`.
