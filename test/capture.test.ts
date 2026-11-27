@@ -118,10 +118,13 @@ describe("private context capture", () => {
 
       expect(runCapture(pending.command, pending.workdir).exitCode).toBe(0);
 
-      const artifact = join(
-        pending.directory,
-        readdirSync(pending.directory)[0]
-      );
+      const [entry] = readdirSync(pending.directory);
+
+      if (entry === undefined) {
+        throw new Error("Missing capture artifact");
+      }
+
+      const artifact = join(pending.directory, entry);
 
       chmodSync(artifact, 0o644);
       expect(() => importCapture(pending)).toThrow(

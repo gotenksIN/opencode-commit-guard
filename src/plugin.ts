@@ -88,7 +88,7 @@ const baselineGuidance = (
   const observed = [
     ...new Set(
       baseline.messages
-        .map((message) => scopePattern.exec(message.split("\n")[0])?.[1])
+        .map((message) => scopePattern.exec(message.split("\n")[0] ?? "")?.[1])
         .filter((scope) => scope !== undefined && scope.length <= 40)
     ),
   ].slice(0, 3);

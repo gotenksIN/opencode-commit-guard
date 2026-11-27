@@ -331,7 +331,7 @@ const scanDoubleQuote = (
     const character = command[i];
 
     if (character === "\\" && i + 1 < command.length) {
-      const escaped = command[i + 1];
+      const escaped = command[i + 1] ?? "";
 
       if (escaped !== "\n") {
         content += ['"', "\\", "$", "`"].includes(escaped)
@@ -466,12 +466,14 @@ const trackSubstitutionWord = (
   let word = "";
 
   for (let end = state.i; end < command.length; end += 1) {
-    if (command[end] === "\\" && command[end + 1] === "\n") {
+    const ch = command[end] ?? "";
+
+    if (ch === "\\" && command[end + 1] === "\n") {
       end += 1;
-    } else if (isWordSeparator(command[end])) {
+    } else if (isWordSeparator(ch)) {
       break;
     } else {
-      word += command[end];
+      word += ch;
     }
   }
 
@@ -567,7 +569,7 @@ const stepSubstitutionWord = (
   nesting: number
 ): boolean => {
   const { i } = state;
-  const character = command[i];
+  const character = command[i] ?? "";
 
   if (character === "#" && state.atWordStart) {
     const end = command.indexOf("\n", i);
@@ -671,7 +673,7 @@ const consumeCommandSubstitution = (
       continue;
     }
 
-    const character = command[state.i];
+    const character = command[state.i] ?? "";
 
     if (stepSubstitutionParenthesis(command, state)) {
       continue;
@@ -731,6 +733,10 @@ const heredocSubstitutions = (body: string): string[] => {
 const isBraceCommandPosition = (tokens: readonly ShellToken[]): boolean => {
   for (let index = tokens.length - 1; index >= 0; index -= 1) {
     const token = tokens[index];
+
+    if (token === undefined) {
+      continue;
+    }
 
     if (token.type === "operator") {
       break;
@@ -794,8 +800,12 @@ const scanWord = (
   let unsupportedDelimiter: string | undefined;
   let i = start;
 
-  while (i < command.length && !isWordSeparator(command[i])) {
-    const character = command[i];
+  while (i < command.length) {
+    const character = command[i] ?? "";
+
+    if (isWordSeparator(character)) {
+      break;
+    }
 
     if (character === "\\" && command[i + 1] === "\n") {
       i += 2;
@@ -898,11 +908,13 @@ const skipTrivia = (command: string, start: number): number => {
   let i = start;
 
   while (i < command.length) {
-    if (/[ \t\r]/u.test(command[i])) {
+    const ch = command[i] ?? "";
+
+    if (/[ \t\r]/u.test(ch)) {
       i += 1;
-    } else if (command[i] === "\\" && command[i + 1] === "\n") {
+    } else if (ch === "\\" && command[i + 1] === "\n") {
       i += 2;
-    } else if (command[i] === "#") {
+    } else if (ch === "#") {
       const end = command.indexOf("\n", i);
       i = end === -1 ? command.length : end;
     } else {
@@ -926,11 +938,9 @@ const readHeredocDelimiter = (
   const stripTabs = command[start + 2] === "-";
   const i = skipTrivia(command, start + (stripTabs ? 3 : 2));
 
-  if (
-    i >= command.length ||
-    isWordSeparator(command[i]) ||
-    /[<>]/u.test(command[i])
-  ) {
+  const next = command[i];
+
+  if (next === undefined || isWordSeparator(next) || /[<>]/u.test(next)) {
     throw incompleteHeredoc();
   }
 
@@ -965,6 +975,10 @@ const readOperator = (
 
   const character = command[i];
 
+  if (character === undefined) {
+    return undefined;
+  }
+
   if (
     "|;\n()".includes(character) ||
     (character === "&" && command[i + 1] !== ">")
@@ -982,10 +996,12 @@ const readOperator = (
       end += 2;
     }
 
+    const following = command[end];
+
     if (
-      command[end] === undefined ||
-      isWordSeparator(command[end]) ||
-      /[<>]/u.test(command[end])
+      following === undefined ||
+      isWordSeparator(following) ||
+      /[<>]/u.test(following)
     ) {
       return character;
     }
@@ -1030,13 +1046,17 @@ const tokenizeShell = (command: string): ShellToken[] => {
         for (const heredoc of heredocs) {
           const body = consumeHeredoc(command, i, heredoc);
           i = body.end;
-          tokens[heredoc.index] = {
-            ...tokens[heredoc.index],
-            heredoc: { body: body.content, quoted: heredoc.quoted },
-            substitutions: heredoc.quoted
-              ? undefined
-              : heredocSubstitutions(body.content),
-          };
+          const target = tokens[heredoc.index];
+
+          if (target !== undefined) {
+            tokens[heredoc.index] = {
+              ...target,
+              heredoc: { body: body.content, quoted: heredoc.quoted },
+              substitutions: heredoc.quoted
+                ? undefined
+                : heredocSubstitutions(body.content),
+            };
+          }
         }
 
         heredocs.length = 0;
@@ -1127,10 +1147,16 @@ const extractCommandWords = (tokens: readonly ShellToken[]): ShellToken[] => {
   const words: ShellToken[] = [];
 
   for (let i = 0; i < tokens.length; i += 1) {
-    if (tokens[i].type === "redirect") {
+    const token = tokens[i];
+
+    if (token === undefined) {
+      continue;
+    }
+
+    if (token.type === "redirect") {
       i += tokens[i + 1]?.type === "word" ? 1 : 0;
-    } else if (tokens[i].type === "word") {
-      words.push(tokens[i]);
+    } else if (token.type === "word") {
+      words.push(token);
     }
   }
 
@@ -1149,6 +1175,10 @@ const skipWrapperOptions = (
 
   while (index < words.length) {
     const argument = words[index];
+
+    if (argument === undefined) {
+      break;
+    }
 
     if (argument === "--") {
       return index + 1;
@@ -1169,6 +1199,10 @@ const findCommandStart = (words: readonly string[]): number => {
 
   while (index < words.length) {
     const word = words[index];
+
+    if (word === undefined) {
+      break;
+    }
 
     if (isAssignment(word) || commandPrefixes.has(word)) {
       index += 1;
@@ -1200,6 +1234,11 @@ const consumeGitGlobalOptions = (
 
   while (index < words.length) {
     const token = words[index];
+
+    if (token === undefined) {
+      break;
+    }
+
     const argument = token.value;
 
     if (token.expansion === true) {
@@ -1224,7 +1263,7 @@ const consumeGitGlobalOptions = (
 
     const option = /^-[Cc]/u.test(argument)
       ? argument.slice(0, 2)
-      : argument.split("=")[0];
+      : (argument.split("=")[0] ?? "");
 
     if (targetGlobalOptions.has(option)) {
       targetError =
@@ -1252,10 +1291,10 @@ interface CommitArguments {
 const consumeShortCommitFlags = (
   words: readonly ShellToken[],
   start: number,
+  argument: string,
   result: CommitArguments
 ): number => {
   let index = start;
-  const argument = words[start].value;
 
   for (let i = 1; i < argument.length; i += 1) {
     const option = argument[i];
@@ -1290,6 +1329,30 @@ const consumeShortCommitFlags = (
   return index;
 };
 
+const consumeMessageOrFileFlag = (
+  words: readonly ShellToken[],
+  index: number,
+  argument: string,
+  isMessage: boolean,
+  result: CommitArguments
+): number => {
+  const equals = argument.indexOf("=");
+  const nextIndex = equals === -1 ? index + 1 : index;
+
+  const input =
+    equals === -1 ? words[nextIndex]?.value : argument.slice(equals + 1);
+
+  if (isMessage) {
+    result.messageExpansion ||= words[nextIndex]?.expansion === true;
+  }
+
+  if (input !== undefined) {
+    (isMessage ? result.messages : result.filePaths).push(input);
+  }
+
+  return nextIndex;
+};
+
 const parseCommitArguments = (
   words: readonly ShellToken[],
   start: number
@@ -1307,12 +1370,13 @@ const parseCommitArguments = (
   };
 
   for (let index = start; index < words.length; index += 1) {
-    const argument = words[index].value;
+    const token = words[index];
 
-    if (argument === "--") {
+    if (token === undefined || token.value === "--") {
       break;
     }
 
+    const argument = token.value;
     const boolean = booleanCommitFlags.get(argument);
 
     if (boolean !== undefined) {
@@ -1320,29 +1384,24 @@ const parseCommitArguments = (
       continue;
     }
 
-    const [option] = argument.split("=");
+    const [option = ""] = argument.split("=");
     const isMessage = option === "--message" || argument === "-m";
     const isFile = option === "--file" || argument === "-F";
 
     if (isMessage || isFile) {
-      const equals = argument.indexOf("=");
-
-      const input =
-        equals === -1 ? words[(index += 1)]?.value : argument.slice(equals + 1);
-
-      if (isMessage) {
-        result.messageExpansion ||= words[index]?.expansion === true;
-      }
-
-      if (input !== undefined) {
-        (isMessage ? result.messages : result.filePaths).push(input);
-      }
+      index = consumeMessageOrFileFlag(
+        words,
+        index,
+        argument,
+        isMessage,
+        result
+      );
     } else if (commitLongOptionsWithArg.has(option)) {
       result.isFixup ||= option === "--fixup";
       result.hasTrailer ||= option === "--trailer";
       index += argument.includes("=") ? 0 : 1;
     } else if (/^-[^-]/u.test(argument)) {
-      index = consumeShortCommitFlags(words, index, result);
+      index = consumeShortCommitFlags(words, index, argument, result);
     }
   }
 
@@ -1387,7 +1446,7 @@ const consumeShellOptions = (words: readonly ShellToken[], start: number) => {
   let executeString = false;
 
   while (index < words.length) {
-    const option = words[index].value;
+    const option = words[index]?.value ?? "";
 
     if (option === "--") {
       index += 1;
@@ -1441,7 +1500,10 @@ const extractShellCBody = (
     );
   }
 
-  if (/^(?:.*\/)?sh$/u.test(words[start].value) && body.value.includes("$'")) {
+  if (
+    /^(?:.*\/)?sh$/u.test(words[start]?.value ?? "") &&
+    body.value.includes("$'")
+  ) {
     throw inspectionError(
       "Cannot parse $' quoting portably in sh -c. Use a literal bash -c or zsh -c body."
     );

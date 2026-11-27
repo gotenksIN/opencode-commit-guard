@@ -210,21 +210,22 @@ export const resolveTargetWorkdir = (
   }
 
   const subRepos = findSubRepos(baseDir);
+  const [firstRepo] = subRepos;
 
-  if (subRepos.length === 1) {
-    return { workdir: realpathSync(subRepos[0]) };
-  }
-
-  if (subRepos.length === 0) {
+  if (firstRepo === undefined) {
     return {
       error: `No Git repository found in ${baseDir}. Specify the repository directory with the 'workdir' option, for example: commit_context({ workdir: "path/to/repo" }).`,
     };
   }
 
+  if (subRepos.length === 1) {
+    return { workdir: realpathSync(firstRepo) };
+  }
+
   const repoList = subRepos.map((repo) => relative(baseDir, repo)).join(", ");
 
   return {
-    error: `The directory ${baseDir} is not a Git repository. Multiple Git repositories were found: ${repoList}.\nSpecify which repository to target with the 'workdir' option, for example:\ncommit_context({ workdir: "${relative(baseDir, subRepos[0])}" })`,
+    error: `The directory ${baseDir} is not a Git repository. Multiple Git repositories were found: ${repoList}.\nSpecify which repository to target with the 'workdir' option, for example:\ncommit_context({ workdir: "${relative(baseDir, firstRepo)}" })`,
   };
 };
 
@@ -684,8 +685,8 @@ const assertBaselineIdentity = (
     !isAbsolute(gitDir) ||
     !isAbsolute(commonDir) ||
     directory !== findGitRoot(baseline.workdir) ||
-    !["branch", "detached"].includes(fields[4]) ||
-    !["head", "unborn"].includes(fields[6]) ||
+    !["branch", "detached"].includes(fields[4] ?? "") ||
+    !["head", "unborn"].includes(fields[6] ?? "") ||
     (head !== null && !/^[a-f0-9]{40,64}$/u.test(head)) ||
     (head === null && rawLog !== "") ||
     (head !== null &&
@@ -699,13 +700,17 @@ const assertBaselineIdentity = (
 
 export const importCapture = (pending: Pending): Baseline => {
   const fields = readCaptureArtifact(pending);
-  const rawRoot = decode(fields[1]).trimEnd();
+  const rawRoot = decode(fields[1] ?? "").trimEnd();
   const root = isAbsolute(rawRoot) ? realpathSync(resolve(rawRoot)) : rawRoot;
-  const gitDir = decode(fields[2]).trimEnd();
-  const commonDir = decode(fields[3]).trimEnd();
-  const branch = fields[4] === "branch" ? decode(fields[5]).trimEnd() : null;
-  const head = fields[6] === "head" ? decode(fields[7]).trim() : null;
-  const rawLog = decode(fields[8]);
+  const gitDir = decode(fields[2] ?? "").trimEnd();
+  const commonDir = decode(fields[3] ?? "").trimEnd();
+
+  const branch =
+    fields[4] === "branch" ? decode(fields[5] ?? "").trimEnd() : null;
+
+  const head = fields[6] === "head" ? decode(fields[7] ?? "").trim() : null;
+
+  const rawLog = decode(fields[8] ?? "");
 
   const messages =
     head === null
@@ -713,7 +718,7 @@ export const importCapture = (pending: Pending): Baseline => {
       : rawLog.split("\0\0").filter((message) => message.length > 0);
 
   // Decode the boolean field even when unset, preserving strict base64 framing.
-  const value = decode(fields[10]).trim();
+  const value = decode(fields[10] ?? "").trim();
 
   let gpgsign: Baseline["gpgsign"] = fields[9] === "unset" ? "unset" : "error";
 
@@ -730,7 +735,7 @@ export const importCapture = (pending: Pending): Baseline => {
     head,
     messages,
     gpgsign,
-    signingkey: decodeConfigField(fields[11], fields[12]),
+    signingkey: decodeConfigField(fields[11] ?? "", fields[12] ?? ""),
   };
 
   assertBaselineIdentity(baseline, fields, rawLog);

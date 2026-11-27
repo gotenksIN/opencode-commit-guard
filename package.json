@@ -23,16 +23,17 @@
   "scripts": {
     "lint": "oxlint --type-aware .",
     "format": "oxfmt --write .",
-    "check": "oxlint --type-aware . && oxfmt --check .",
+    "check": "oxlint --type-aware . && oxfmt --check . && tsc --noEmit && bun test",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "build": "bun build index.ts --outdir dist --target bun --format esm --external @opencode/plugin --external effect",
     "prepack": "bun run build"
   },
   "devDependencies": {
+    "@interfere/landmines": "0.1.1",
     "@opencode/core": "latest",
     "@opencode/plugin": "latest",
-    "@types/bun": "1.4.4",
+    "@types/bun": "1.4.5",
     "effect": "4.1.0",
     "oxfmt": "latest",
     "oxlint": "latest",
@@ -45,6 +46,6 @@
     "effect": "^4.0.0"
   },
   "engines": {
-    "bun": ">=1.2.0"
+    "bun": ">=1.4.0"
   }
 }
