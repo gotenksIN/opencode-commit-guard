@@ -17,25 +17,44 @@ The `commit_context` tool returns a capture command for the foreground `shell` t
 The agent runs that command, so the normal shell permission flow authorizes every read of repository history and configuration.
 The plugin runs no Git commands and reads no repository history or Git configuration on its own.
 
-The capture writes a private owner-only artifact and prints only `RECEIPT_OK`.
+The capture writes a private owner-only artifact where each line is a base64-encoded Git result, and prints only `RECEIPT_OK`.
+No Git output enters the shell result.
 Tool results and model context receive bounded guidance, not complete historical messages.
+On POSIX, the capture script enables Bash job control so the watchdog kills the worker process group and all Git children at the deadline.
+During import, the plugin decodes every base64 config field, even when unset, to enforce strict framing.
+
 The plugin stores a checksum-protected baseline in plugin storage.
 Storage scopes include the project, session, canonical checkout root, workspace, and policy.
 A persisted counter stops a late or stale capture from replacing a refreshed baseline.
+Unclaimed captures expire after 20 seconds so models capture context right before committing.
+When a model retries `commit_context` without `refresh: true` for the same workdir, the plugin refreshes the unclaimed capture expiry; when the workdir changes within the same checkout root, the plugin replaces the unclaimed capture.
+The plugin records recently expired capture commands and detects modified live capture commands before shell parsing so agents receive direct expiry or unchanged-command guidance.
 
 Signoff policy derives from the captured effective `commit.gpgsign` value.
 `true` requires a signoff; `false` or unset does not.
 A missing baseline blocks commits, and an unreadable signing setting requires a configuration repair, not another capture.
 The plugin rejects the removed `requireSignoff` option, because signoff follows the captured policy.
 
+## Target PowerShell 7 on Windows
+
+Windows context capture targets PowerShell 7 (`pwsh`) exclusively and drops legacy `powershell.exe` and `cmd.exe`.
+The Windows capture command passes an uncompressed UTF-16LE `pwsh -NoLogo -NoProfile -NonInteractive -EncodedCommand` script, removing `gzip` and `Invoke-Expression` bootstrapping.
+It uses PowerShell 7 native `$p.Kill($true)` with start-state guards instead of shelling out to `taskkill.exe`, and parameterizes the watchdog timeout in milliseconds.
+
+In `execute.before`, the plugin selects `pwsh` top-level parsing when the shell tool description matches `using pwsh.` (checking `event.info?.description`, then `ctx.tool.list()`, then `process.platform === "win32"`).
+The shell parser in `src/shell.ts` implements PowerShell 7 quoting, Unicode smart quotes and dashes, backtick escapes, line and block comments, here-strings, subexpressions, call operators, target mutators, and fail-closed splatting and stop-parsing checks.
+It recursively unwraps nested `pwsh` and `pwsh.exe` invocations (including `-Command`, `-CommandWithArgs`, and strict UTF-16LE `-EncodedCommand`) in both POSIX and `pwsh` modes.
+In `pwsh` mode, `git commit -F -` accepts a single-stage literal here-string pipeline (`@'...'@ | git commit -F -`) while rejecting multi-stage pipelines, expandable `@"..."@` here-strings, and disk message files.
+
 ## Fail closed on parsing and metadata
 
 The shell parser inspects commands without running them.
 If it cannot prove the command words and message text, it rejects the command.
 Shell expansion in messages, message files, and commit target overrides fail closed.
+In POSIX tokenization, adjacent ANSI-C quotes buffer raw bytes until the whole word is assembled so split UTF-8 sequences decode accurately, and arithmetic `(( ... ))` expressions do not treat left-shift `<<` operators as heredoc redirects.
 
-Publication requires shell result metadata of exactly `status: "completed"`, `exit: 0`, and `truncated: false`.
-The plugin rejects other metadata, such as `timeout: true`, `shellID`, `pid`, or `killed`.
+Publication requires shell result metadata of exactly `status: "completed"`, `exit: 0`, and `truncated: false`, with optional `timeout: false`.
+The plugin rejects other metadata and names any unexpected keys, such as `shellID`, `pid`, or `killed`, in the failure reason.
 Publication also requires the artifact `END` sentinel.
 
 This rule handles two OpenCode `v2.4.1` behaviors:
@@ -82,16 +101,19 @@ The peer floor is `@opencode/plugin ^2.4.1` and `effect ^4.0.0`.
 
 ## Test through the real OpenCode host
 
-Plugin tests load the plugin into an in-process `@opencode/core` host.
-The host uses real `Tool`, `PluginHooks`, `Shell`, `ShellTool`, `Session`, and `KV` services and runs real shell commands.
+Plugin tests load the plugin into an in-process `@opencode/core` host (`test/host.test-utils.ts`).
+The host uses real `Tool`, `PluginHooks`, `Shell`, `ShellTool`, `ShellSelect`, `Session`, and `KV` services and runs real shell commands.
 Hand-rolled plugin contexts drift from upstream contracts, so the suite does not use them.
-Host layers change only to isolate state and to control permissions, flags, storage failures, and output limits.
+Host layers change only to isolate state and to control permissions, flags, storage failures, shell selection, and output limits.
 
-Pure unit tests cover the shell parser, the validator, and the capture artifact format.
-Tests run concurrently through `bunfig.toml`; tests that patch the clock run serially.
+Pure unit tests live beside their source modules (`src/shell.test.ts`, `src/validator.test.ts`, and `src/capture.test.ts`).
+The plugin reads time through Effect `Clock.Clock` captured in `plugin.effect`.
+Time-boundary tests provide a plugin-scoped `TestClock` from `effect/testing` without replacing the host clock or mutating `Date.now`, so the entire suite runs concurrently through `bunfig.toml`.
+Real `pwsh` capture, watchdog, and host E2E tests run unconditionally on `win32` and on POSIX hosts whenever `pwsh` is on `PATH`.
 
 ## Keep tooling on the latest release
 
 Development dependencies on `@opencode/core`, `@opencode/plugin`, `ultracite`, `oxlint`, `oxlint-tsgolint`, and `oxfmt` use `latest`.
+`@interfere/landmines` stays pinned to `0.1.1` until Ultracite updates `ultracite/oxlint/landmines` for `@interfere/landmines >= 0.2.0`.
 `bun.lock` records the resolved versions.
-Type-aware Oxlint with the Ultracite core and anti-slop presets, and Oxfmt, gate every change.
+Type-aware Oxlint with the Ultracite core, anti-slop, and landmines presets, Oxfmt, TypeScript (`NodeNext` with `noUncheckedIndexedAccess`), and `bun test` gate every change through `bun run check`.
