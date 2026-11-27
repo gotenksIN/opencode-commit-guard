@@ -12,7 +12,7 @@ import type { CommitGuardConfig, JsonValue } from "./types.js";
 
 export const parseConfig = (
   options: Plugin.Context["options"] | JsonValue | undefined
-): CommitGuardConfig => {
+) => {
   if (options === undefined) {
     return defaultConfig;
   }
@@ -96,5 +96,5 @@ export const parseConfig = (
     allowedScopes,
     maxLineLength,
     enforceSignoff: defaultConfig.enforceSignoff,
-  };
+  } satisfies CommitGuardConfig;
 };

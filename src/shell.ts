@@ -139,21 +139,21 @@ interface SubstitutionState {
   heredocs: HeredocDelimiter[];
 }
 
-const inspectionError = (message: string): Error =>
+const inspectionError = (message: string) =>
   new Error(`[commit-guard] Pre-execution shell inspection failed: ${message}`);
 
-const incompleteHeredoc = (): Error =>
+const incompleteHeredoc = () =>
   inspectionError(
     "Cannot validate an incomplete heredoc. Close its delimiter on a separate line before running the command."
   );
 
-const isWordSeparator = (character: string): boolean =>
+const isWordSeparator = (character: string) =>
   /[ \t\r\n;&|()]/u.test(character);
 
-const isExpansion = (command: string, i: number): boolean =>
+const isExpansion = (command: string, i: number) =>
   command[i] === "$" && /[a-zA-Z0-9_{[*#?@!$-]/u.test(command[i + 1] ?? "");
 
-const ansiEscape = (command: string, start: number): ScanResult => {
+const ansiEscape = (command: string, start: number) => {
   const escaped = command[start + 1] ?? "";
   const literal = simpleAnsiEscapes.get(escaped);
 
@@ -203,7 +203,7 @@ const ansiEscape = (command: string, start: number): ScanResult => {
     : { content: String.fromCodePoint(code), end };
 };
 
-const scanSingleQuote = (command: string, start: number): ScanResult => {
+const scanSingleQuote = (command: string, start: number) => {
   const end = command.indexOf("'", start + 1);
 
   if (end === -1) {
@@ -215,7 +215,7 @@ const scanSingleQuote = (command: string, start: number): ScanResult => {
   return { content: command.slice(start + 1, end), end: end + 1 };
 };
 
-const scanAnsiQuote = (command: string, start: number): ScanResult => {
+const scanAnsiQuote = (command: string, start: number) => {
   const bytes: number[] = [];
   let i = start + 2;
 
@@ -243,7 +243,6 @@ const scanAnsiQuote = (command: string, start: number): ScanResult => {
 
   const nul = bytes.indexOf(0);
 
-  // Keep bytes separate until the whole word is assembled: adjacent quotes can split UTF-8.
   return {
     content: "",
     end: i + 1,
@@ -255,7 +254,7 @@ const consumeBackticks = (
   command: string,
   start: number,
   doubleQuoted = false
-): ScanResult => {
+) => {
   let content = "";
 
   for (let i = start + 1; i < command.length; i += 1) {
@@ -283,7 +282,7 @@ const consumeQuotedParameter = (
   command: string,
   start: number,
   nesting = 0
-): number => {
+) => {
   if (nesting > 12) {
     throw inspectionError(
       "Shell parsing limit exceeded. Simplify the unsupported syntax."
@@ -317,11 +316,7 @@ const consumeQuotedParameter = (
   );
 };
 
-const scanDoubleQuote = (
-  command: string,
-  start: number,
-  nesting: number
-): ScanResult => {
+const scanDoubleQuote = (command: string, start: number, nesting: number) => {
   let content = "";
   let expansion = false;
   const substitutions: string[] = [];
@@ -378,7 +373,7 @@ const consumeHeredoc = (
   command: string,
   start: number,
   heredoc: HeredocDelimiter
-): ScanResult => {
+) => {
   let i = start;
   let body = "";
 
@@ -417,11 +412,7 @@ const consumeHeredoc = (
   throw incompleteHeredoc();
 };
 
-const advanceCaseState = (
-  cases: CaseState[],
-  depth: number,
-  word: string
-): void => {
+const advanceCaseState = (cases: CaseState[], depth: number, word: string) => {
   const active = cases.at(-1);
   const patternWord = active?.phase === "pattern";
 
@@ -450,10 +441,7 @@ const advanceCaseState = (
   }
 };
 
-const trackSubstitutionWord = (
-  command: string,
-  state: SubstitutionState
-): void => {
+const trackSubstitutionWord = (command: string, state: SubstitutionState) => {
   const phase = state.cases.at(-1)?.phase;
 
   if (
@@ -497,7 +485,7 @@ const stepSubstitutionSyntax = (
   command: string,
   state: SubstitutionState,
   nesting: number
-): boolean => {
+) => {
   const { i } = state;
   const character = command[i];
   const active = state.cases.at(-1);
@@ -567,7 +555,7 @@ const stepSubstitutionWord = (
   command: string,
   state: SubstitutionState,
   nesting: number
-): boolean => {
+) => {
   const { i } = state;
   const character = command[i] ?? "";
 
@@ -584,7 +572,7 @@ const stepSubstitutionWord = (
 
   const result = scanWordFragment(command, i, nesting + 1);
 
-  if (result === undefined) {
+  if (result === null) {
     return false;
   }
 
@@ -597,7 +585,7 @@ const stepSubstitutionWord = (
 const stepSubstitutionParenthesis = (
   command: string,
   state: SubstitutionState
-): boolean => {
+) => {
   const character = command[state.i];
   const active = state.cases.at(-1);
 
@@ -643,11 +631,11 @@ const stepSubstitutionParenthesis = (
   return false;
 };
 
-const consumeCommandSubstitution = (
+const consumeCommandSubstitution: (
   command: string,
   start: number,
-  nesting = 0
-): ScanResult => {
+  nesting?: number
+) => ScanResult = (command, start, nesting = 0) => {
   if (nesting > 12) {
     throw inspectionError(
       "Shell parsing limit exceeded. Simplify the unsupported syntax."
@@ -710,7 +698,7 @@ const consumeCommandSubstitution = (
   );
 };
 
-const heredocSubstitutions = (body: string): string[] => {
+const heredocSubstitutions = (body: string) => {
   const substitutions: string[] = [];
 
   for (let i = 0; i < body.length; i += 1) {
@@ -730,7 +718,7 @@ const heredocSubstitutions = (body: string): string[] => {
   return substitutions;
 };
 
-const isBraceCommandPosition = (tokens: readonly ShellToken[]): boolean => {
+const isBraceCommandPosition = (tokens: readonly ShellToken[]) => {
   for (let index = tokens.length - 1; index >= 0; index -= 1) {
     const token = tokens[index];
 
@@ -775,7 +763,7 @@ const isBraceCommandPosition = (tokens: readonly ShellToken[]): boolean => {
   return true;
 };
 
-const isArithmeticCommandPosition = (tokens: readonly ShellToken[]): boolean =>
+const isArithmeticCommandPosition = (tokens: readonly ShellToken[]) =>
   isBraceCommandPosition(tokens) ||
   (tokens.at(-1)?.type === "word" &&
     tokens.at(-1)?.value === "for" &&
@@ -787,11 +775,7 @@ interface WordResult extends ScanResult {
   unsupportedDelimiter?: string;
 }
 
-const scanWord = (
-  command: string,
-  start: number,
-  nesting: number
-): WordResult => {
+const scanWord = (command: string, start: number, nesting: number) => {
   let content = "";
   const bytes: number[] = [];
   const substitutions: string[] = [];
@@ -830,7 +814,7 @@ const scanWord = (
 
     const result = scanWordFragment(command, i, nesting);
 
-    if (result !== undefined) {
+    if (result !== null) {
       quoted ||= result.quoted === true;
 
       if (result.bytes === undefined) {
@@ -868,11 +852,11 @@ const scanWord = (
   };
 };
 
-const scanWordFragment = (
+const scanWordFragment: (
   command: string,
   i: number,
   nesting: number
-): WordResult | undefined => {
+) => WordResult | null = (command, i, nesting) => {
   const pair = command.slice(i, i + 2);
 
   if (pair === "$'") {
@@ -901,10 +885,10 @@ const scanWordFragment = (
     };
   }
 
-  return undefined;
+  return null;
 };
 
-const skipTrivia = (command: string, start: number): number => {
+const skipTrivia = (command: string, start: number) => {
   let i = start;
 
   while (i < command.length) {
@@ -930,11 +914,11 @@ interface DelimiterResult {
   end: number;
 }
 
-const readHeredocDelimiter = (
+const readHeredocDelimiter: (
   command: string,
   start: number,
   nesting: number
-): DelimiterResult => {
+) => DelimiterResult = (command, start, nesting) => {
   const stripTabs = command[start + 2] === "-";
   const i = skipTrivia(command, start + (stripTabs ? 3 : 2));
 
@@ -955,7 +939,7 @@ const readHeredocDelimiter = (
   return {
     delimiter: {
       delimiter: word.content,
-      quoted: word.quoted === true,
+      quoted: word.quoted,
       stripTabs,
     },
     end: word.end,
@@ -966,7 +950,7 @@ const readOperator = (
   command: string,
   i: number,
   tokens: readonly ShellToken[]
-): string | undefined => {
+) => {
   const pair = command.slice(i, i + 2);
 
   if (twoCharacterOperators.has(pair)) {
@@ -976,7 +960,7 @@ const readOperator = (
   const character = command[i];
 
   if (character === undefined) {
-    return undefined;
+    return null;
   }
 
   if (
@@ -1007,10 +991,10 @@ const readOperator = (
     }
   }
 
-  return undefined;
+  return null;
 };
 
-const tokenizeShell = (command: string): ShellToken[] => {
+const tokenizeShell = (command: string) => {
   const tokens: ShellToken[] = [];
   const heredocs: (HeredocDelimiter & { index: number })[] = [];
   let depth = 0;
@@ -1020,7 +1004,7 @@ const tokenizeShell = (command: string): ShellToken[] => {
   while ((i = skipTrivia(command, i)) < command.length) {
     const operator = readOperator(command, i, tokens);
 
-    if (operator !== undefined) {
+    if (operator !== null) {
       if (operator === "(") {
         if (
           arithmeticDepth === undefined &&
@@ -1070,7 +1054,6 @@ const tokenizeShell = (command: string): ShellToken[] => {
     )?.[0];
 
     if (redirect !== undefined) {
-      // Arithmetic shifts are ordinary expression text, not stdin redirections.
       tokens.push({ type: "redirect", value: redirect });
 
       if (arithmeticDepth === undefined && /^\d*<<-?$/u.test(redirect)) {
@@ -1107,7 +1090,7 @@ const tokenizeShell = (command: string): ShellToken[] => {
   return tokens;
 };
 
-const extractCommandWords = (tokens: readonly ShellToken[]): ShellToken[] => {
+const extractCommandWords = (tokens: readonly ShellToken[]) => {
   const words: ShellToken[] = [];
 
   for (let i = 0; i < tokens.length; i += 1) {
@@ -1118,7 +1101,8 @@ const extractCommandWords = (tokens: readonly ShellToken[]): ShellToken[] => {
     }
 
     if (token.type === "redirect") {
-      i += tokens[i + 1]?.type === "word" ? 1 : 0;
+      const hasEmbeddedTarget = /[<>]&(?:\d+|-)$/u.test(token.value);
+      i += !hasEmbeddedTarget && tokens[i + 1]?.type === "word" ? 1 : 0;
     } else if (token.type === "word") {
       words.push(token);
     }
@@ -1127,14 +1111,13 @@ const extractCommandWords = (tokens: readonly ShellToken[]): ShellToken[] => {
   return words;
 };
 
-const isAssignment = (word: string): boolean =>
-  /^[a-zA-Z_][a-zA-Z0-9_]*=/u.test(word);
+const isAssignment = (word: string) => /^[a-zA-Z_][a-zA-Z0-9_]*=/u.test(word);
 
 const skipWrapperOptions = (
   words: readonly string[],
   start: number,
   valued: ReadonlySet<string>
-): number => {
+) => {
   let index = start;
 
   while (index < words.length) {
@@ -1158,7 +1141,7 @@ const skipWrapperOptions = (
   return index;
 };
 
-const findCommandStart = (words: readonly string[]): number => {
+const findCommandStart = (words: readonly string[]) => {
   let index = 0;
 
   while (index < words.length) {
@@ -1184,15 +1167,10 @@ const findCommandStart = (words: readonly string[]): number => {
   return index;
 };
 
-interface GlobalOptions {
-  index: number;
-  targetError?: string;
-}
-
 const consumeGitGlobalOptions = (
   words: readonly ShellToken[],
   start: number
-): GlobalOptions => {
+) => {
   let index = start;
   let targetError: string | undefined;
 
@@ -1257,7 +1235,7 @@ const consumeShortCommitFlags = (
   start: number,
   argument: string,
   result: CommitArguments
-): number => {
+) => {
   let index = start;
 
   for (let i = 1; i < argument.length; i += 1) {
@@ -1299,7 +1277,7 @@ const consumeMessageOrFileFlag = (
   argument: string,
   isMessage: boolean,
   result: CommitArguments
-): number => {
+) => {
   const equals = argument.indexOf("=");
   const nextIndex = equals === -1 ? index + 1 : index;
 
@@ -1317,10 +1295,7 @@ const consumeMessageOrFileFlag = (
   return nextIndex;
 };
 
-const parseCommitArguments = (
-  words: readonly ShellToken[],
-  start: number
-): CommitArguments => {
+const parseCommitArguments = (words: readonly ShellToken[], start: number) => {
   const result: CommitArguments = {
     messages: [],
     filePaths: [],
@@ -1372,7 +1347,7 @@ const parseCommitArguments = (
   return result;
 };
 
-const isGitExecutable = (executable: string, mode: ShellMode): boolean =>
+const isGitExecutable = (executable: string, mode: ShellMode) =>
   mode === "pwsh"
     ? /^(?:.*[/\\])?git(?:\.exe)?$/iu.test(executable)
     : executable === "git" || executable.endsWith("/git");
@@ -1381,17 +1356,17 @@ const extractInvocation = (
   words: readonly ShellToken[],
   start: number,
   mode: ShellMode
-): GitCommitInvocation | undefined => {
+) => {
   const executable = words[start]?.value;
 
   if (executable === undefined || !isGitExecutable(executable, mode)) {
-    return undefined;
+    return null;
   }
 
   const global = consumeGitGlobalOptions(words, start + 1);
 
   if (words[global.index]?.value !== "commit") {
-    return undefined;
+    return null;
   }
 
   const wrapperChange = words
@@ -1445,18 +1420,15 @@ const consumeShellOptions = (words: readonly ShellToken[], start: number) => {
   return { index, executeString };
 };
 
-const extractShellCBody = (
-  words: readonly ShellToken[],
-  start: number
-): string | undefined => {
+const extractShellCBody = (words: readonly ShellToken[], start: number) => {
   if (!/^(?:.*\/)?(?:bash|sh|zsh)$/u.test(words[start]?.value ?? "")) {
-    return undefined;
+    return null;
   }
 
   const { index, executeString } = consumeShellOptions(words, start);
 
   if (!executeString) {
-    return undefined;
+    return null;
   }
 
   const body = words[index];
@@ -1483,7 +1455,7 @@ const attachStdinHeredoc = (
   invocation: GitCommitInvocation,
   tokens: readonly ShellToken[],
   pipeline: boolean
-): GitCommitInvocation => {
+) => {
   if (!invocation.filePaths.includes("-")) {
     return invocation;
   }
@@ -1558,19 +1530,35 @@ const pwshTargetMutators = new Set([
   ".",
 ]);
 
-const isPwshSingleQuote = (character: string): boolean =>
+const isPwshSingleQuote = (character: string) =>
   character === "'" || (character >= "\u2018" && character <= "\u201B");
 
-const isPwshDoubleQuote = (character: string): boolean =>
+const isPwshDoubleQuote = (character: string) =>
   character === '"' || (character >= "\u201C" && character <= "\u201E");
 
-const isPwshWordSeparator = (character: string): boolean =>
-  /[ \t\r\n;&|(){}]/u.test(character);
+const isPwshHorizontalSpace = (character: string) =>
+  character === " " ||
+  character === "\t" ||
+  character === "\u0085" ||
+  character === "\u00A0" ||
+  character === "\u2028" ||
+  character === "\u2029" ||
+  character === "\v" ||
+  character === "\f" ||
+  /^\p{Zs}$/u.test(character);
 
-const isPwshVariableStart = (command: string, index: number): boolean =>
-  command[index] === "$" && /[a-zA-Z0-9_?^$:]/u.test(command[index + 1] ?? "");
+const isPwshNewline = (character: string) =>
+  character === "\n" || character === "\r";
 
-const decodePwshBacktick = (command: string, start: number): ScanResult => {
+const isPwshWordSeparator = (character: string) =>
+  isPwshHorizontalSpace(character) ||
+  isPwshNewline(character) ||
+  ";&|(){}".includes(character);
+
+const isPwshVariableStart = (command: string, index: number) =>
+  command[index] === "$" && /[\p{L}\p{N}_?^$:]/u.test(command[index + 1] ?? "");
+
+const decodePwshBacktick = (command: string, start: number) => {
   const next = command[start + 1];
 
   if (next === undefined) {
@@ -1607,7 +1595,7 @@ const decodePwshBacktick = (command: string, start: number): ScanResult => {
   return { content: mapped ?? next, end: start + 2 };
 };
 
-const scanPwshSingleQuote = (command: string, start: number): ScanResult => {
+const scanPwshSingleQuote = (command: string, start: number) => {
   let content = "";
   let i = start + 1;
 
@@ -1615,8 +1603,10 @@ const scanPwshSingleQuote = (command: string, start: number): ScanResult => {
     const ch = command[i] ?? "";
 
     if (isPwshSingleQuote(ch)) {
-      if (isPwshSingleQuote(command[i + 1] ?? "")) {
-        content += "'";
+      const next = command[i + 1] ?? "";
+
+      if (isPwshSingleQuote(next)) {
+        content += next;
         i += 2;
         continue;
       }
@@ -1633,7 +1623,7 @@ const scanPwshSingleQuote = (command: string, start: number): ScanResult => {
   );
 };
 
-const scanPwshBracedVar = (command: string, start: number): number => {
+const scanPwshBracedVar = (command: string, start: number) => {
   for (let i = start + 2; i < command.length; i += 1) {
     if (command[i] === "`") {
       i += 1;
@@ -1647,7 +1637,7 @@ const scanPwshBracedVar = (command: string, start: number): number => {
   );
 };
 
-const skipPwshBlockComment = (command: string, start: number): number => {
+const skipPwshBlockComment = (command: string, start: number) => {
   const end = command.indexOf("#>", start + 2);
 
   if (end === -1) {
@@ -1697,11 +1687,11 @@ interface PwshWordResult extends ScanResult {
   hereString?: { readonly body: string; readonly quoted: boolean };
 }
 
-const scanPwshHereString = (
+const scanPwshHereString: (
   command: string,
   start: number,
   nesting: number
-): PwshWordResult => {
+) => PwshWordResult = (command, start, nesting) => {
   const quote = command[start + 1] ?? "";
   const isSingle = isPwshSingleQuote(quote);
   let i = start + 2;
@@ -1769,11 +1759,11 @@ const scanPwshHereString = (
   );
 };
 
-const scanPwshDoubleQuote = (
+const scanPwshDoubleQuote: (
   command: string,
   start: number,
   nesting: number
-): ScanResult => {
+) => ScanResult = (command, start, nesting) => {
   let content = "";
   let expansion = false;
   const substitutions: string[] = [];
@@ -1783,8 +1773,10 @@ const scanPwshDoubleQuote = (
     const ch = command[i] ?? "";
 
     if (isPwshDoubleQuote(ch)) {
-      if (isPwshDoubleQuote(command[i + 1] ?? "")) {
-        content += '"';
+      const next = command[i + 1] ?? "";
+
+      if (isPwshDoubleQuote(next)) {
+        content += next;
         i += 2;
         continue;
       }
@@ -1824,7 +1816,7 @@ const stepPwshSubexpression = (
   i: number,
   atWordStart: boolean,
   nesting: number
-): number | undefined => {
+) => {
   const ch = command[i] ?? "";
 
   if (ch === "<" && command[i + 1] === "#") {
@@ -1832,9 +1824,13 @@ const stepPwshSubexpression = (
   }
 
   if (ch === "#" && atWordStart) {
-    const end = command.indexOf("\n", i);
+    let end = i + 1;
 
-    return end === -1 ? command.length : end;
+    while (end < command.length && !isPwshNewline(command[end] ?? "")) {
+      end += 1;
+    }
+
+    return end;
   }
 
   if (
@@ -1857,14 +1853,14 @@ const stepPwshSubexpression = (
     return decodePwshBacktick(command, i).end;
   }
 
-  return undefined;
+  return null;
 };
 
-const consumePwshSubexpression = (
+const consumePwshSubexpression: (
   command: string,
   start: number,
-  nesting = 0
-): ScanResult => {
+  nesting?: number
+) => ScanResult = (command, start, nesting = 0) => {
   if (nesting > 12) {
     throw inspectionError(
       "Shell parsing limit exceeded. Simplify the unsupported syntax."
@@ -1878,7 +1874,7 @@ const consumePwshSubexpression = (
   while (i < command.length) {
     const stepped = stepPwshSubexpression(command, i, atWordStart, nesting);
 
-    if (stepped !== undefined) {
+    if (stepped !== null) {
       i = stepped;
       atWordStart = false;
       continue;
@@ -1905,27 +1901,30 @@ const consumePwshSubexpression = (
   );
 };
 
-const skipPwshTrivia = (command: string, start: number): number => {
+const skipPwshTrivia = (command: string, start: number) => {
   let i = start;
 
   while (i < command.length) {
     const ch = command[i] ?? "";
 
-    if (ch === " " || ch === "\t" || ch === "\r") {
+    if (isPwshHorizontalSpace(ch)) {
       i += 1;
-    } else if (ch === "`" && command[i + 1] === "\n") {
-      i += 2;
     } else if (
       ch === "`" &&
       command[i + 1] === "\r" &&
       command[i + 2] === "\n"
     ) {
       i += 3;
+    } else if (ch === "`" && isPwshNewline(command[i + 1] ?? "")) {
+      i += 2;
     } else if (ch === "<" && command[i + 1] === "#") {
       i = skipPwshBlockComment(command, i);
     } else if (ch === "#") {
-      const end = command.indexOf("\n", i);
-      i = end === -1 ? command.length : end;
+      i += 1;
+
+      while (i < command.length && !isPwshNewline(command[i] ?? "")) {
+        i += 1;
+      }
     } else {
       break;
     }
@@ -1934,10 +1933,43 @@ const skipPwshTrivia = (command: string, start: number): number => {
   return i;
 };
 
+const findStopParsingEnd = (command: string, start: number) => {
+  let inQuote = false;
+
+  for (let i = start; i < command.length; i += 1) {
+    const ch = command[i] ?? "";
+
+    if (isPwshNewline(ch)) {
+      return i;
+    }
+
+    if (isPwshDoubleQuote(ch)) {
+      inQuote = !inQuote;
+    } else if (
+      !inQuote &&
+      (ch === "|" ||
+        command.slice(i, i + 2) === "&&" ||
+        command.slice(i, i + 2) === "||")
+    ) {
+      return i;
+    }
+  }
+
+  return command.length;
+};
+
 const scanPwshStopParsing = (command: string, start: number) => {
-  const lineEnd = command.indexOf("\n", start);
-  const end = lineEnd === -1 ? command.length : lineEnd;
-  const raw = command.slice(start, end).replace(/\r$/u, "");
+  const end = findStopParsingEnd(command, start);
+  let contentStart = start;
+
+  while (
+    contentStart < end &&
+    isPwshHorizontalSpace(command[contentStart] ?? "")
+  ) {
+    contentStart += 1;
+  }
+
+  const raw = command.slice(contentStart, end);
 
   if (/%[^%\r\n]+%/u.test(raw)) {
     throw inspectionError(
@@ -1945,52 +1977,32 @@ const scanPwshStopParsing = (command: string, start: number) => {
     );
   }
 
-  const tokens: ShellToken[] = [];
-  let i = 0;
+  if (/["\u201C-\u201E]/u.test(raw)) {
+    throw inspectionError(
+      "Cannot inspect quoted arguments after PowerShell stop-parsing (--%). Supply literal arguments without --%."
+    );
+  }
 
-  while (i < raw.length) {
-    while (i < raw.length && (raw[i] === " " || raw[i] === "\t")) {
-      i += 1;
-    }
-
-    if (i >= raw.length) {
-      break;
-    }
-
-    let word = "";
-    let inQuote = false;
-
-    while (i < raw.length) {
-      const ch = raw[i] ?? "";
-
-      if (ch === '"') {
-        inQuote = !inQuote;
-        i += 1;
-      } else if (!inQuote && (ch === " " || ch === "\t")) {
-        break;
-      } else {
-        word += ch;
-        i += 1;
-      }
-    }
-
-    if (inQuote) {
+  for (const ch of raw) {
+    if (ch !== " " && isPwshHorizontalSpace(ch)) {
       throw inspectionError(
-        "Unterminated double quote after PowerShell stop-parsing (--%)."
+        "Cannot inspect non-space whitespace after PowerShell stop-parsing (--%). Supply literal arguments without --%."
       );
     }
+  }
 
-    tokens.push({ type: "word", value: word });
+  const tokens: ShellToken[] = [];
+
+  for (const part of raw.split(" ")) {
+    if (part.length > 0) {
+      tokens.push({ type: "word", value: part });
+    }
   }
 
   return { tokens, end };
 };
 
-const scanPwshWordFragment = (
-  command: string,
-  i: number,
-  nesting: number
-): ScanResult | undefined => {
+const scanPwshWordFragment = (command: string, i: number, nesting: number) => {
   const ch = command[i] ?? "";
 
   if (isPwshSingleQuote(ch)) {
@@ -2022,14 +2034,10 @@ const scanPwshWordFragment = (
     return decodePwshBacktick(command, i);
   }
 
-  return undefined;
+  return null;
 };
 
-const scanPwshWord = (
-  command: string,
-  start: number,
-  nesting: number
-): PwshWordResult => {
+const scanPwshWord = (command: string, start: number, nesting: number) => {
   const first = command[start] ?? "";
   const second = command[start + 1] ?? "";
 
@@ -2040,7 +2048,7 @@ const scanPwshWord = (
     return scanPwshHereString(command, start, nesting);
   }
 
-  if (first === "@" && /^[a-zA-Z0-9_]/u.test(second)) {
+  if (first === "@" && /^[\p{L}\p{N}_]/u.test(second)) {
     throw inspectionError(
       "Cannot inspect PowerShell splatting (@var) reliably. Supply literal arguments."
     );
@@ -2062,9 +2070,13 @@ const scanPwshWord = (
       break;
     }
 
-    const fragment = scanPwshWordFragment(command, i, nesting);
+    const fragment: ScanResult | null = scanPwshWordFragment(
+      command,
+      i,
+      nesting
+    );
 
-    if (fragment !== undefined) {
+    if (fragment !== null) {
       content += fragment.content;
       expansion ||= fragment.expansion === true;
       substitutions.push(...(fragment.substitutions ?? []));
@@ -2080,35 +2092,75 @@ const scanPwshWord = (
   return { content, end: i, expansion, substitutions };
 };
 
-const tokenizePwsh = (command: string): ShellToken[] => {
+const readPwshPunctuation = (
+  command: string,
+  i: number,
+  tokens: ShellToken[]
+) => {
+  const pair = command.slice(i, i + 2);
+
+  if (pair === "&&" || pair === "||") {
+    tokens.push({ type: "operator", value: pair });
+
+    return i + 2;
+  }
+
+  const ch = command[i] ?? "";
+
+  if (isPwshNewline(ch)) {
+    tokens.push({ type: "operator", value: "\n" });
+
+    return i + (ch === "\r" && command[i + 1] === "\n" ? 2 : 1);
+  }
+
+  if (ch === "(") {
+    const sub = consumePwshSubexpression(command, i - 1, 0);
+    tokens.push({
+      type: "word",
+      value: command.slice(i, sub.end),
+      expansion: true,
+      grouped: true,
+      substitutions: [sub.content],
+    });
+
+    return sub.end;
+  }
+
+  if (ch === ")") {
+    throw inspectionError(
+      `Unexpected closing parenthesis at character ${i + 1}.`
+    );
+  }
+
+  if ("|;{}".includes(ch)) {
+    tokens.push({ type: "operator", value: ch });
+
+    return i + 1;
+  }
+
+  if (ch === "&") {
+    const atStart = tokens.length === 0 || tokens.at(-1)?.type === "operator";
+    tokens.push({ type: atStart ? "word" : "operator", value: "&" });
+
+    return i + 1;
+  }
+
+  return null;
+};
+
+const tokenizePwsh = (command: string) => {
   const tokens: ShellToken[] = [];
   let i = 0;
 
   while ((i = skipPwshTrivia(command, i)) < command.length) {
-    const pair = command.slice(i, i + 2);
+    const next = readPwshPunctuation(command, i, tokens);
 
-    if (pair === "&&" || pair === "||") {
-      tokens.push({ type: "operator", value: pair });
-      i += 2;
+    if (next !== null) {
+      i = next;
       continue;
     }
 
     const ch = command[i] ?? "";
-
-    if ("|;\n(){}".includes(ch)) {
-      tokens.push({ type: "operator", value: ch });
-      i += 1;
-      continue;
-    }
-
-    if (ch === "&") {
-      const atStart = tokens.length === 0 || tokens.at(-1)?.type === "operator";
-
-      tokens.push({ type: atStart ? "word" : "operator", value: "&" });
-      i += 1;
-      continue;
-    }
-
     const redirect = /^(?:[1-6*])?(?:>>|>&1|>)/u.exec(command.slice(i))?.[0];
 
     if (redirect !== undefined) {
@@ -2128,6 +2180,13 @@ const tokenizePwsh = (command: string): ShellToken[] => {
     }
 
     const word = scanPwshWord(command, i, 0);
+
+    if (word.end <= i) {
+      throw inspectionError(
+        `Unexpected PowerShell token "${ch}" at character ${i + 1}.`
+      );
+    }
+
     tokens.push({
       type: "word",
       value: word.content,
@@ -2141,7 +2200,7 @@ const tokenizePwsh = (command: string): ShellToken[] => {
   return tokens;
 };
 
-const decodePwshEncodedCommand = (encoded: string): string => {
+const decodePwshEncodedCommand = (encoded: string) => {
   if (
     encoded.length === 0 ||
     encoded.length % 4 !== 0 ||
@@ -2176,32 +2235,32 @@ type PwshSwitchKind =
 
 const pwshSwitchTable: readonly (readonly [string, PwshSwitchKind, string])[] =
   [
-    ["command", "command", "c"],
-    ["commandwithargs", "commandWithArgs", "cwa"],
-    ["encodedcommand", "encodedCommand", "e"],
-    ["encodedarguments", "unsupported", "ea"],
-    ["file", "unsupported", "f"],
-    ["workingdirectory", "workingDirectory", "wd"],
-    ["nologo", "boolean", "nol"],
-    ["noprofile", "boolean", "nop"],
-    ["noninteractive", "boolean", "noni"],
-    ["noexit", "boolean", "noe"],
-    ["noprofileloadtime", "boolean", "noprofilel"],
-    ["login", "boolean", "l"],
-    ["mta", "boolean", "m"],
-    ["sta", "boolean", "st"],
-    ["interactive", "boolean", "int"],
     ["version", "boolean", "v"],
     ["help", "boolean", "h"],
+    ["login", "boolean", "l"],
+    ["noexit", "unsupported", "noe"],
+    ["noprofile", "boolean", "nop"],
+    ["nologo", "boolean", "nol"],
+    ["noninteractive", "boolean", "noni"],
     ["sshservermode", "boolean", "sshs"],
-    ["inputformat", "value", "if"],
-    ["outputformat", "value", "of"],
-    ["executionpolicy", "value", "ep"],
+    ["noprofileloadtime", "boolean", "noprofileloadtime"],
+    ["interactive", "boolean", "i"],
+    ["configurationfile", "value", "configurationfile"],
+    ["configurationname", "value", "config"],
+    ["custompipename", "value", "cus"],
+    ["commandwithargs", "commandWithArgs", "commandwithargs"],
+    ["command", "command", "c"],
     ["windowstyle", "value", "w"],
-    ["configurationname", "value", "configurationn"],
-    ["configurationfile", "value", "configurationf"],
-    ["custompipename", "value", "cu"],
-    ["settingsfile", "value", "set"],
+    ["file", "unsupported", "f"],
+    ["outputformat", "value", "o"],
+    ["inputformat", "value", "inp"],
+    ["executionpolicy", "value", "ex"],
+    ["encodedcommand", "encodedCommand", "e"],
+    ["encodedarguments", "unsupported", "encodeda"],
+    ["settingsfile", "value", "settings"],
+    ["sta", "boolean", "sta"],
+    ["mta", "boolean", "mta"],
+    ["workingdirectory", "workingDirectory", "wo"],
   ];
 
 const pwshSwitchAliases = new Map<string, PwshSwitchKind>([
@@ -2215,11 +2274,11 @@ const pwshSwitchAliases = new Map<string, PwshSwitchKind>([
   ["ep", "value"],
 ]);
 
-const classifyPwshSwitch = (raw: string): PwshSwitchKind | undefined => {
+const classifyPwshSwitch = (raw: string) => {
   const normalized = raw.replace(/^[/\-–-―]+/u, "").toLowerCase();
 
   if (normalized.length === 0) {
-    return undefined;
+    return null;
   }
 
   const alias = pwshSwitchAliases.get(normalized);
@@ -2228,22 +2287,22 @@ const classifyPwshSwitch = (raw: string): PwshSwitchKind | undefined => {
     return alias;
   }
 
-  const matches = pwshSwitchTable.filter(
+  const matched = pwshSwitchTable.find(
     ([full, , minPrefix]) =>
       full.startsWith(normalized) && normalized.length >= minPrefix.length
   );
 
-  return matches.length === 1 ? matches[0]?.[1] : undefined;
+  return matched?.[1] ?? null;
 };
 
-const isPwshSwitchToken = (raw: string): boolean =>
+const isPwshSwitchToken = (raw: string) =>
   raw.length > 1 && /^[/\-–-―]/u.test(raw);
 
 const readPwshCommandArgs = (
   words: readonly ShellToken[],
   index: number,
   kind: "command" | "commandWithArgs" | "encodedCommand"
-): string => {
+) => {
   const target = words[index];
 
   if (target === undefined || target.expansion === true) {
@@ -2256,14 +2315,14 @@ const readPwshCommandArgs = (
     return decodePwshEncodedCommand(target.value);
   }
 
-  if (kind === "commandWithArgs") {
-    return target.value;
-  }
-
   if (target.value === "-") {
     throw inspectionError(
-      "Cannot inspect pwsh -Command - reading from standard input. Supply a literal command."
+      "Cannot inspect pwsh reading commands from standard input (-). Supply a literal command."
     );
+  }
+
+  if (kind === "commandWithArgs") {
+    return target.value;
   }
 
   const remaining = words.slice(index);
@@ -2277,16 +2336,15 @@ const readPwshCommandArgs = (
   return remaining.map((word) => word.value).join(" ");
 };
 
-const extractPwshBody = (
-  words: readonly ShellToken[],
-  start: number
-): { body: string; workingDirectoryChanged: boolean } | undefined => {
+const extractPwshBody = (words: readonly ShellToken[], start: number) => {
   if (!/^(?:.*[/\\])?pwsh(?:\.exe)?$/iu.test(words[start]?.value ?? "")) {
-    return undefined;
+    return null;
   }
 
   let index = start + 1;
   let workingDirectoryChanged = false;
+  let encodedBody: string | undefined;
+  let infoFlag = false;
 
   while (index < words.length) {
     const token = words[index];
@@ -2309,16 +2367,25 @@ const extractPwshBody = (
 
     const kind = classifyPwshSwitch(token.value);
 
-    if (kind === undefined || kind === "unsupported") {
+    if (kind === null || kind === "unsupported") {
       throw inspectionError(
         `Cannot inspect unsupported pwsh switch "${token.value}" reliably. Use literal -Command or run git commit directly.`
       );
     }
 
+    const normalized = token.value.replace(/^[/\-–-―]+/u, "").toLowerCase();
+
     if (kind === "boolean") {
+      infoFlag ||=
+        normalized === "?" ||
+        "help".startsWith(normalized) ||
+        "version".startsWith(normalized);
       index += 1;
     } else if (kind === "value" || kind === "workingDirectory") {
       workingDirectoryChanged ||= kind === "workingDirectory";
+      index += 2;
+    } else if (kind === "encodedCommand") {
+      encodedBody = readPwshCommandArgs(words, index + 1, kind);
       index += 2;
     } else {
       return {
@@ -2328,7 +2395,17 @@ const extractPwshBody = (
     }
   }
 
-  return undefined;
+  if (encodedBody !== undefined) {
+    return { body: encodedBody, workingDirectoryChanged };
+  }
+
+  if (infoFlag) {
+    return null;
+  }
+
+  throw inspectionError(
+    "Cannot inspect bare pwsh invocation without -Command or -EncodedCommand. Supply a literal command."
+  );
 };
 
 interface PipelineStage {
@@ -2337,15 +2414,12 @@ interface PipelineStage {
   pipedHereString?: string;
 }
 
-const splitPipelines = (
-  tokens: readonly ShellToken[],
-  mode: ShellMode
-): PipelineStage[] => {
+const splitPipelines = (tokens: readonly ShellToken[], mode: ShellMode) => {
   const result: PipelineStage[] = [];
   let stages: ShellToken[][] = [];
   let current: ShellToken[] = [];
 
-  const flush = (): void => {
+  const flush = () => {
     if (current.length > 0) {
       stages.push(current);
       current = [];
@@ -2409,7 +2483,7 @@ const splitPipelines = (
 const attachPwshStdin = (
   invocation: GitCommitInvocation,
   stage: PipelineStage
-): GitCommitInvocation => {
+) => {
   if (!invocation.filePaths.includes("-")) {
     return invocation;
   }
@@ -2432,7 +2506,7 @@ const resolveCommandStart = (
   words: readonly ShellToken[],
   values: readonly string[],
   mode: ShellMode
-): number => {
+) => {
   if (mode === "posix") {
     return findCommandStart(values);
   }
@@ -2454,7 +2528,7 @@ const isTargetMutatorCommand = (
   values: readonly string[],
   start: number,
   mode: ShellMode
-): boolean => {
+) => {
   const commandName = values[start] ?? "";
 
   if (mode === "pwsh") {
@@ -2470,16 +2544,72 @@ const isTargetMutatorCommand = (
   );
 };
 
+const assertLiteralCommandName = (
+  firstWord: ShellToken | undefined,
+  mode: ShellMode
+) => {
+  if (firstWord?.expansion !== true) {
+    return;
+  }
+
+  if (
+    mode === "pwsh" &&
+    (firstWord.hereString !== undefined ||
+      firstWord.grouped === true ||
+      /^\$\{?env:/iu.test(firstWord.value))
+  ) {
+    return;
+  }
+
+  throw inspectionError(
+    "Cannot inspect a dynamic command name. Use literal command words."
+  );
+};
+
 export interface ExtractOptions {
   readonly shell?: ShellMode;
 }
 
-const extractGitCommitsInternal = (
+interface ExtractionResult {
+  readonly invocations: GitCommitInvocation[];
+  readonly changedDirectory: boolean;
+}
+
+const collectStageSubstitutions = (
+  tokens: readonly ShellToken[],
+  mode: ShellMode,
+  changedDirectory: boolean,
+  depth: number,
+  invocations: GitCommitInvocation[]
+) => {
+  let mutated = changedDirectory;
+
+  for (const token of tokens) {
+    for (const substitution of token.substitutions ?? []) {
+      const subResult = extractGitCommitsInternal(
+        substitution,
+        mode,
+        mutated,
+        depth + 1
+      );
+
+      invocations.push(...subResult.invocations);
+
+      if (mode === "pwsh" && subResult.changedDirectory) {
+        mutated = true;
+      }
+    }
+  }
+
+  return mutated;
+};
+
+const extractGitCommitsInternal: (
   command: string,
   mode: ShellMode,
   inheritedDirectoryChange: boolean,
   depth: number
-): GitCommitInvocation[] => {
+) => ExtractionResult = (command, mode, inheritedDirectoryChange, depth) => {
   if (depth > 12 || command.length > 262_144) {
     throw inspectionError(
       "Shell parsing limit exceeded. Simplify the unsupported syntax."
@@ -2493,15 +2623,19 @@ const extractGitCommitsInternal = (
   let changedDirectory = inheritedDirectoryChange;
 
   for (const stage of splitPipelines(tokens, mode)) {
+    changedDirectory = collectStageSubstitutions(
+      stage.tokens,
+      mode,
+      changedDirectory,
+      depth,
+      invocations
+    );
+
     const words = extractCommandWords(stage.tokens);
     const values = words.map((token) => token.value);
     const start = resolveCommandStart(words, values, mode);
 
-    if (words[start]?.expansion === true) {
-      throw inspectionError(
-        "Cannot inspect a dynamic command name. Use literal command words."
-      );
-    }
+    assertLiteralCommandName(words[start], mode);
 
     const invocation = extractInvocation(words, start, mode);
     const posixBody = extractShellCBody(words, start);
@@ -2513,25 +2647,25 @@ const extractGitCommitsInternal = (
         .slice(0, start)
         .some((word) => word === "env" || isAssignment(word));
 
-    if (posixBody !== undefined) {
+    if (posixBody !== null) {
       invocations.push(
         ...extractGitCommitsInternal(
           posixBody,
           "posix",
           changedDirectory || wrapperChange,
           depth + 1
-        )
+        ).invocations
       );
     }
 
-    if (pwshBody !== undefined) {
+    if (pwshBody !== null) {
       invocations.push(
         ...extractGitCommitsInternal(
           pwshBody.body,
           "pwsh",
           changedDirectory || wrapperChange || pwshBody.workingDirectoryChanged,
           depth + 1
-        )
+        ).invocations
       );
     }
 
@@ -2539,7 +2673,7 @@ const extractGitCommitsInternal = (
       changedDirectory = true;
     }
 
-    if (invocation !== undefined) {
+    if (invocation !== null) {
       const target = changedDirectory
         ? {
             ...invocation,
@@ -2556,24 +2690,9 @@ const extractGitCommitsInternal = (
     }
   }
 
-  for (const token of tokens) {
-    for (const substitution of token.substitutions ?? []) {
-      invocations.push(
-        ...extractGitCommitsInternal(
-          substitution,
-          mode,
-          changedDirectory,
-          depth + 1
-        )
-      );
-    }
-  }
-
-  return invocations;
+  return { invocations, changedDirectory };
 };
 
-export const extractGitCommits = (
-  command: string,
-  options?: ExtractOptions
-): GitCommitInvocation[] =>
-  extractGitCommitsInternal(command, options?.shell ?? "posix", false, 0);
+export const extractGitCommits = (command: string, options?: ExtractOptions) =>
+  extractGitCommitsInternal(command, options?.shell ?? "posix", false, 0)
+    .invocations;

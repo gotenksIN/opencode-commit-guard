@@ -7,7 +7,7 @@ export const createTempRepo = (
   teardown: (() => void)[],
   signing?: string,
   parent = tmpdir()
-): string => {
+) => {
   const directory = mkdtempSync(path.join(parent, "commit-guard-fixture-"));
 
   teardown.push(() => {
@@ -33,26 +33,7 @@ export const createTempRepo = (
   return directory;
 };
 
-export const withPlatform = <T>(platform: string, run: () => T): T => {
-  const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
-
-  if (descriptor === undefined) {
-    throw new Error("Missing platform descriptor");
-  }
-
-  try {
-    Object.defineProperty(process, "platform", { value: platform });
-
-    return run();
-  } finally {
-    Object.defineProperty(process, "platform", descriptor);
-  }
-};
-
-export const expectThrows = (
-  run: () => void,
-  expected?: string | RegExp
-): Error => {
+export const expectThrows = (run: () => void, expected?: string | RegExp) => {
   let caught: Error | undefined;
 
   try {
@@ -81,7 +62,7 @@ export const expectThrows = (
 export const expectRejects = async <T>(
   promise: Promise<T>,
   expected: string | RegExp
-): Promise<Error> => {
+) => {
   let caught: Error | undefined;
 
   try {
@@ -99,21 +80,4 @@ export const expectRejects = async <T>(
       throw caught;
     }
   }, expected);
-};
-
-/** Patches the global `Date.now`; run callers with `test.serial`. */
-export const withFakeNow = async (
-  run: (advance: (milliseconds: number) => void) => Promise<void>
-): Promise<void> => {
-  const original = Date.now;
-  let clock = original();
-  Date.now = () => clock;
-
-  try {
-    await run((milliseconds) => {
-      clock += milliseconds;
-    });
-  } finally {
-    Date.now = original;
-  }
 };

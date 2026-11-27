@@ -2,15 +2,15 @@ import { describe, expect, test } from "bun:test";
 import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import { defaultConfig } from "../src/types.js";
-import type { CommitGuardConfig, GitCommitInvocation } from "../src/types.js";
-import { validateGitCommits } from "../src/validator.js";
-import { createTempRepo, expectThrows } from "./helpers.js";
+import { createTempRepo, expectThrows } from "../test/helpers.test-utils.js";
+import { defaultConfig } from "./types.js";
+import type { CommitGuardConfig, GitCommitInvocation } from "./types.js";
+import { validateGitCommits } from "./validator.js";
 
 const invocation = (
   messages: string[],
   overrides: Partial<GitCommitInvocation> = {}
-): GitCommitInvocation => ({
+) => ({
   messages,
   filePaths: [],
   hasSignoffFlag: true,
@@ -23,7 +23,7 @@ const validate = (
   message: string,
   config = defaultConfig,
   overrides: Partial<GitCommitInvocation> = {}
-): void => {
+) => {
   validateGitCommits([invocation([message], overrides)], config);
 };
 
@@ -32,7 +32,7 @@ const expectValidationError = (
   expected: string | RegExp,
   config = defaultConfig,
   overrides: Partial<GitCommitInvocation> = {}
-): Error =>
+) =>
   expectThrows(() => {
     validate(message, config, overrides);
   }, expected);

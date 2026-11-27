@@ -1,14 +1,14 @@
 import { describe, expect, test } from "bun:test";
 
-import { extractGitCommits } from "../src/shell.js";
-import { defaultConfig } from "../src/types.js";
-import type { GitCommitInvocation } from "../src/types.js";
-import { validateGitCommits } from "../src/validator.js";
+import { extractGitCommits } from "./shell.js";
+import { defaultConfig } from "./types.js";
+import type { GitCommitInvocation } from "./types.js";
+import { validateGitCommits } from "./validator.js";
 
 const expectSingleCommit = (
   command: string,
   expected: Partial<GitCommitInvocation>
-): GitCommitInvocation => {
+) => {
   const commits = extractGitCommits(command);
   expect(commits).toHaveLength(1);
   const [commit] = commits;
@@ -22,7 +22,7 @@ const expectSingleCommit = (
   return commit;
 };
 
-const parseMessages = (command: string): readonly string[] =>
+const parseMessages = (command: string) =>
   expectSingleCommit(command, {}).messages;
 
 describe("shell parsing through commit extraction", () => {
@@ -861,5 +861,262 @@ describe("extractGitCommits", () => {
         "preceding directory or environment change"
       );
     }
+  });
+});
+
+const pwsh = (command: string) => extractGitCommits(command, { shell: "pwsh" });
+
+const encodePwsh = (script: string) =>
+  Buffer.from(script, "utf16le").toString("base64");
+
+describe("PowerShell 7 (pwsh) parsing", () => {
+  test("parses single quotes with doubled escapes and smart quotes", () => {
+    expect(pwsh("git commit -s -m 'core: Don''t break'")[0]?.messages).toEqual([
+      "core: Don't break",
+    ]);
+    expect(
+      pwsh("git commit -s -m ‘core: Smart’’s quote’")[0]?.messages
+    ).toEqual(["core: Smart’s quote"]);
+    expect(pwsh('git commit -s -m “core: Say ""hi""”')[0]?.messages).toEqual([
+      'core: Say "hi"',
+    ]);
+  });
+
+  test("parses backtick escapes, Unicode escapes, and line continuations", () => {
+    expect(
+      pwsh('git commit -s -m "core: Line one`n`nLine two `"quoted`""')[0]
+        ?.messages
+    ).toEqual(['core: Line one\n\nLine two "quoted"']);
+    expect(pwsh('git commit -s -m "core: Caf`u{00E9}"')[0]?.messages).toEqual([
+      "core: Caf\u00E9",
+    ]);
+    expect(
+      pwsh("git commit `\n  -s `\n  -m 'core: Continued'")[0]?.messages
+    ).toEqual(["core: Continued"]);
+  });
+
+  test("strips line comments and inline or multiline block comments", () => {
+    expect(
+      pwsh(
+        "<# leading comment #> git commit <# inline #> -s -m 'core: Clean' # trailing\n"
+      )[0]?.messages
+    ).toEqual(["core: Clean"]);
+    expect(pwsh("# git commit -m 'ignored'\ngit status")).toEqual([]);
+    expect(pwsh("<#\ngit commit -m 'ignored'\n#>\ngit status")).toEqual([]);
+  });
+
+  test("accepts literal here-strings via -m and single-stage stdin pipelines", () => {
+    const inline = pwsh(
+      "git commit -s -m @'\ncore: Inline here-string\n\nBody with $var literal.\n'@"
+    );
+
+    expect(inline).toHaveLength(1);
+    expect(inline[0]?.messages).toEqual([
+      "core: Inline here-string\n\nBody with $var literal.",
+    ]);
+    expect(inline[0]?.messageExpansion).toBe(false);
+
+    const piped = pwsh(
+      "@'\ncore: Piped here-string\n\nBody line.\n'@ | git commit -s -F -"
+    );
+
+    expect(piped).toHaveLength(1);
+    expect(piped[0]?.stdinMessage).toBe(
+      "core: Piped here-string\n\nBody line."
+    );
+    expect(piped[0]?.stdinError).toBeUndefined();
+    expect(() => {
+      validateGitCommits(piped, defaultConfig);
+    }).not.toThrow();
+  });
+
+  test("rejects expandable here-string pipelines, multi-stage pipelines, and disk -F", () => {
+    const expandablePiped = pwsh(
+      '@"\ncore: Expandable $var\n"@ | git commit -s -F -'
+    );
+
+    expect(expandablePiped[0]?.stdinError).toContain("here-string");
+
+    const multiStage = pwsh(
+      "@'\ncore: Multi\n'@ | Out-String | git commit -s -F -"
+    );
+
+    expect(multiStage[0]?.stdinError).toContain("here-string");
+
+    const expandableInline = pwsh('git commit -s -m @"\ncore: Hello $user\n"@');
+
+    expect(expandableInline[0]?.messageExpansion).toBe(true);
+    expect(
+      pwsh('Write-Output @"\n$(git commit -m bad)\n"@')[0]?.messages
+    ).toEqual(["bad"]);
+  });
+
+  test("handles call operator, subexpressions, and Windows git.exe paths", () => {
+    expect(
+      pwsh("& git commit -s -m 'core: Call operator'")[0]?.messages
+    ).toEqual(["core: Call operator"]);
+    expect(
+      pwsh(
+        "& 'C:\\Program Files\\Git\\cmd\\git.exe' commit -s -m 'core: Path'"
+      )[0]?.messages
+    ).toEqual(["core: Path"]);
+    expect(pwsh("Write-Output $(git commit -m 'bad')")[0]?.messages).toEqual([
+      "bad",
+    ]);
+    expect(pwsh("Write-Output @(git commit -m 'bad')")[0]?.messages).toEqual([
+      "bad",
+    ]);
+    expect(pwsh("git commit --% -s -m core:Stop")[0]?.messages).toEqual([
+      "core:Stop",
+    ]);
+    expect(
+      pwsh("git --%\u00A0commit -s -m core:LeadNbsp")[0]?.messages
+    ).toEqual(["core:LeadNbsp"]);
+  });
+
+  test("unwraps nested pwsh -Command, -CommandWithArgs, and -EncodedCommand across modes", () => {
+    expect(
+      extractGitCommits(
+        `pwsh -NoProfile -c "git commit -s -m 'core: Nested'"`
+      )[0]?.messages
+    ).toEqual(["core: Nested"]);
+    expect(
+      pwsh(
+        `pwsh.exe /NonInteractive –Command git commit -s -m "'core: Joined'"`
+      )[0]?.messages
+    ).toEqual(["core: Joined"]);
+    expect(
+      pwsh(`pwsh -cwa "git commit -s -m 'core: Cwa'" extra`)[0]?.messages
+    ).toEqual(["core: Cwa"]);
+
+    const encoded = encodePwsh("git commit -s -m 'core: Encoded'");
+
+    expect(
+      extractGitCommits(`pwsh -NoLogo -ec ${encoded}`)[0]?.messages
+    ).toEqual(["core: Encoded"]);
+    expect(
+      pwsh(`pwsh -wd ../other -EncodedCommand ${encoded}`)[0]?.targetError
+    ).toContain("preceding directory or environment change");
+    expect(pwsh(`pwsh -enc ${encoded} -wd ../other`)[0]?.targetError).toContain(
+      "preceding directory or environment change"
+    );
+    expect(
+      pwsh(`pwsh -com "git commit -s -m 'core: Abbrev'"`)[0]?.messages
+    ).toEqual(["core: Abbrev"]);
+    expect(
+      pwsh(`pwsh -o XML -c "git commit -s -m 'core: Out'"`)[0]?.messages
+    ).toEqual(["core: Out"]);
+    expect(
+      pwsh(`pwsh -i -c "git commit -s -m 'core: Interactive'"`)[0]?.messages
+    ).toEqual(["core: Interactive"]);
+    expect(
+      pwsh(`pwsh -config test -c "git commit -s -m 'core: Config'"`)[0]
+        ?.messages
+    ).toEqual(["core: Config"]);
+  });
+
+  test("handles stream merges, stop-parsing pipelines, parenthesized args, subexpression mutators, and Unicode CharTraits", () => {
+    expect(pwsh("(Get-Date)")).toEqual([]);
+    expect(
+      pwsh("git 2>&1 commit -s -m 'core: After merge'")[0]?.messages
+    ).toEqual(["core: After merge"]);
+    expect(
+      pwsh("git status --% foo | git commit -s -m 'core: After stop'")[0]
+        ?.messages
+    ).toEqual(["core: After stop"]);
+    expect(
+      pwsh("git status --% foo && git commit -s -m 'core: After chain'")[0]
+        ?.messages
+    ).toEqual(["core: After chain"]);
+
+    const parenTarget = pwsh(
+      "git -C ('../other') commit -s -m 'core: Paren arg'"
+    );
+
+    expect(parenTarget).toHaveLength(1);
+    expect(parenTarget[0]?.messages).toEqual(["core: Paren arg"]);
+    expect(parenTarget[0]?.targetError).toContain(
+      "Git global directory or configuration flags"
+    );
+    expect(() => pwsh("git ('commit') -m 'core: Dynamic subcommand'")).toThrow(
+      "Pre-execution shell inspection failed"
+    );
+    expect(
+      pwsh(
+        "Write-Output $(Set-Location ../other); git commit -s -m 'core: Sub'"
+      )[0]?.targetError
+    ).toContain("preceding directory or environment change");
+    expect(pwsh("git\u00A0commit -s -m 'core: Nbsp'")[0]?.messages).toEqual([
+      "core: Nbsp",
+    ]);
+    expect(pwsh("git\u0085commit -s -m 'core: Nel'")[0]?.messages).toEqual([
+      "core: Nel",
+    ]);
+    expect(pwsh("git\u2028commit -s -m 'core: Lsep'")[0]?.messages).toEqual([
+      "core: Lsep",
+    ]);
+    expect(pwsh("git\u2029commit -s -m 'core: Psep'")[0]?.messages).toEqual([
+      "core: Psep",
+    ]);
+    expect(
+      pwsh("# comment\rgit commit -s -m 'core: After CR'")[0]?.messages
+    ).toEqual(["core: After CR"]);
+    expect(
+      pwsh('git commit -s -m "core: $caf\u00E9"')[0]?.messageExpansion
+    ).toBe(true);
+    expect(() => pwsh("git commit @caf\u00E9")).toThrow(
+      "Pre-execution shell inspection failed"
+    );
+  });
+
+  test("marks pwsh target mutators as ambiguous", () => {
+    for (const mutation of [
+      "cd ../other",
+      "sl ../other",
+      "Set-Location ../other",
+      "Push-Location ../other",
+      "pushd ../other",
+      "Pop-Location",
+      "popd",
+      "$env:GIT_DIR = '/other/.git'",
+      "Set-Variable GIT_DIR '/other/.git'",
+      "sv GIT_DIR '/other/.git'",
+      "iex 'cd ../other'",
+      "Invoke-Expression 'cd ../other'",
+      ". ./env.ps1",
+    ]) {
+      const changed = pwsh(`${mutation}; git commit -s -m 'core: Mutated'`);
+
+      expect(changed).toHaveLength(1);
+      expect(changed[0]?.targetError).toContain(
+        "preceding directory or environment change"
+      );
+    }
+  });
+
+  test.each([
+    ["splatting", "git commit @args"],
+    ["dynamic call operator", "& $cmd commit -m 'core: Dynamic'"],
+    ["stop-parsing env var", "git commit --% -m %MSG%"],
+    ["stop-parsing quoted args", 'git commit --% -s -m "core: Stop parsing"'],
+    ["stop-parsing smart quotes", "git commit --% -m \u201Ccore: Smart\u201D"],
+    ["stop-parsing embedded tab", "git commit --% -m\tcore:Tab"],
+    ["unmatched closing parenthesis", "git status )"],
+    ["pwsh -NoExit", "pwsh -NoExit -c 'git status'"],
+    ["pwsh -isswait", "pwsh -isswait -c 'git status'"],
+    ["pwsh -File", "pwsh -File ./commit.ps1"],
+    ["pwsh -c -", "pwsh -c -"],
+    ["pwsh -cwa -", "pwsh -cwa -"],
+    ["bare pwsh", "pwsh -NoProfile"],
+    ["pwsh -ea", "pwsh -ea AAAA -c 'git status'"],
+    ["positional pwsh script", "pwsh ./commit.ps1"],
+    ["invalid base64", "pwsh -EncodedCommand not-valid-base64!"],
+    ["odd UTF-16LE base64", "pwsh -EncodedCommand QQ=="],
+    ["unterminated block comment", "git status <# unclosed"],
+    ["unterminated here-string", "git commit -m @'\nunterminated"],
+  ])("fails closed on %s", (_label, command) => {
+    expect(() => pwsh(command)).toThrow(
+      "Pre-execution shell inspection failed"
+    );
   });
 });

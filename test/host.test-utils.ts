@@ -33,7 +33,17 @@ import { Document, Info } from "@opencode/schema/config";
 import { ConfigToolOutput } from "@opencode/schema/config/tool-output";
 import { LayerNode } from "@opencode/util/effect/layer-node";
 import { Global } from "@opencode/util/global";
-import { Cause, Effect, Exit, Layer, References, Scope } from "effect";
+import {
+  Cause,
+  Clock,
+  Duration,
+  Effect,
+  Exit,
+  Layer,
+  References,
+  Scope,
+} from "effect";
+import { TestClock } from "effect/testing";
 
 import plugin from "../index.js";
 import type { JsonValue } from "../src/types.js";
@@ -59,6 +69,10 @@ export interface HostOptions {
   readonly sessionWorkspace?: string;
   /** Shell tool output byte limit from OpenCode configuration. */
   readonly maxOutputBytes?: number;
+  /** Shell binary configured on the host ShellSelect service. */
+  readonly shell?: string;
+  /** Provide a plugin-scoped Effect TestClock instead of the live clock. */
+  readonly testClock?: boolean;
   /** Registers host hooks before the plugin loads, so they run first. */
   readonly setup?: (
     ctx: Plugin.Context
@@ -90,7 +104,7 @@ const disabledPty = Layer.mock(PersistentPty.Service, {
 
 const agent = Agent.ID.make("build");
 
-const toError = (cause: Cause.Cause<unknown>): Error => {
+const toError = (cause: Cause.Cause<unknown>) => {
   const failure = Cause.findErrorOption(cause);
   const value = failure._tag === "Some" ? failure.value : Cause.squash(cause);
 
@@ -199,7 +213,6 @@ export const createHost = async (input: HostOptions) => {
             Effect.gen(function* permissionLayer() {
               const service = yield* Permission.Service;
 
-              // Skip permission prompts; deny only the configured actions.
               return {
                 ...service,
                 assert: (request) =>
@@ -254,7 +267,17 @@ export const createHost = async (input: HostOptions) => {
       PluginHost.make({ list: () => Effect.succeed([]) }, plugin.id)
     );
 
-    // Isolate Git in host shells from user, system, and inherited configuration.
+    if (input.shell !== undefined) {
+      const configuredShell = input.shell;
+      const select = await run(ShellSelect.Service);
+
+      await run(
+        select.transform((editor) => {
+          editor.configure(configuredShell);
+        })
+      );
+    }
+
     await run(
       ctx.shell.hook("create.before", (event) =>
         Effect.sync(() => {
@@ -292,16 +315,25 @@ export const createHost = async (input: HostOptions) => {
           )
         : await run(sessions.get(input.sessionID));
 
+    const testClock =
+      input.testClock === true ? await run(TestClock.make()) : undefined;
+
     let pluginScope: Scope.Closeable | undefined;
 
-    // PluginHost.make passes empty options; supply the plugin entry options.
     const load = async (options: Plugin.Context["options"] = {}) => {
       const current = await Effect.runPromise(Scope.make());
 
       pluginScope = current;
       await run(Effect.addFinalizer(() => Scope.close(current, Exit.void)));
+
+      const loaded = plugin
+        .effect({ ...ctx, options })
+        .pipe(Scope.provide(current));
+
       await run(
-        plugin.effect({ ...ctx, options }).pipe(Scope.provide(current))
+        testClock === undefined
+          ? loaded
+          : loaded.pipe(Effect.provideService(Clock.Clock, testClock))
       );
     };
 
@@ -353,6 +385,13 @@ export const createHost = async (input: HostOptions) => {
       ) => {
         await run(ctx.tool.hook(name, handler));
       },
+      advance: async (milliseconds: number) => {
+        if (testClock === undefined) {
+          throw new Error("Host testClock is not enabled");
+        }
+
+        await run(testClock.adjust(Duration.millis(milliseconds)));
+      },
       move: async (target: string) => {
         await run(
           sessions.move({
@@ -360,24 +399,12 @@ export const createHost = async (input: HostOptions) => {
             directory: AbsolutePath.make(target),
           })
         );
+        await run(sessions.wait(session.id));
+        const moved = await run(sessions.get(session.id));
 
-        // The session runner applies a move at its next step boundary.
-        const settle = async (remaining: number): Promise<void> => {
-          const moved = await run(sessions.get(session.id));
-
-          if (moved.location.directory === target) {
-            return;
-          }
-
-          if (remaining === 0) {
-            throw new Error(`Session did not move to ${target}`);
-          }
-
-          await Bun.sleep(10);
-          await settle(remaining - 1);
-        };
-
-        await settle(500);
+        if (moved.location.directory !== target) {
+          throw new Error(`Session did not move to ${target}`);
+        }
       },
       removeSession: async () => {
         await run(sessions.remove(session.id));

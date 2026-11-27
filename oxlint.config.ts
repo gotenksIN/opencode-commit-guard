@@ -1,16 +1,19 @@
 import antiSlop from "ultracite/oxlint/anti-slop";
 import core from "ultracite/oxlint/core";
+import landmines from "ultracite/oxlint/landmines";
 
 export default {
-  extends: [core, antiSlop],
+  extends: [core, antiSlop, landmines],
+  jsPlugins: [...antiSlop.jsPlugins, ...landmines.jsPlugins],
   env: core.env,
   ignorePatterns: [...(core.ignorePatterns ?? []), "dist/**"],
   rules: {
-    "typescript/consistent-indexed-object-style": "error",
-    "unicorn/no-immediate-mutation": "error",
-    "unicorn/prefer-reflect-apply": "error",
     "oxc/no-accumulating-spread": "error",
-    "anti-slop/no-runtime-typeof": "error",
+    "anti-slop/no-runtime-typeof": ["error", { allowInTypeGuards: false }],
+    "landmines-testing/no-flake-masking": [
+      "error",
+      { allow: { "src/capture.test.ts": 3, "test/plugin.test.ts": 36 } },
+    ],
   },
   overrides: [
     {

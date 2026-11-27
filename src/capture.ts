@@ -12,6 +12,7 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
+import type { Dirent } from "node:fs";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
 
@@ -63,7 +64,7 @@ export interface Pending {
   closed?: boolean;
 }
 
-const digest = (text: string): string =>
+const digest = (text: string) =>
   createHash("sha256").update(text).digest("hex");
 
 export const scopeFor = (
@@ -71,7 +72,7 @@ export const scopeFor = (
   sessionID: string,
   config: CommitGuardConfig,
   targetDir?: string
-): string => {
+) => {
   const { location } = ctx;
 
   const directory = targetDir ?? location.directory;
@@ -92,7 +93,7 @@ export const scopeFor = (
   );
 };
 
-const isGitDirectory = (dir: string): boolean => {
+const isGitDirectory = (dir: string) => {
   try {
     return existsSync(join(dir, ".git"));
   } catch {
@@ -100,18 +101,20 @@ const isGitDirectory = (dir: string): boolean => {
   }
 };
 
-export const findGitRoot = (startDir: string): string | undefined => {
+export const findGitRoot = (startDir: string) => {
+  let found: string | undefined;
   let current: string;
 
   try {
     current = realpathSync(startDir);
   } catch {
-    return undefined;
+    return found;
   }
 
   while (true) {
     if (isGitDirectory(current)) {
-      return current;
+      found = current;
+      break;
     }
 
     const parent = dirname(current);
@@ -123,48 +126,45 @@ export const findGitRoot = (startDir: string): string | undefined => {
     current = parent;
   }
 
-  return undefined;
+  return found;
 };
 
-interface ResolvedTargetWorkdir {
-  readonly workdir?: string;
-  readonly error?: string;
-}
-
-const findSubRepos = (dir: string, maxDepth = 2): string[] => {
+const findSubRepos = (dir: string, maxDepth = 2) => {
   const repos: string[] = [];
 
-  const search = (currentDir: string, currentDepth: number): void => {
+  const search = (currentDir: string, currentDepth: number) => {
     if (currentDepth > maxDepth) {
       return;
     }
 
+    let entries: Dirent[] = [];
+
     try {
-      const entries = readdirSync(currentDir, { withFileTypes: true });
-
-      for (const entry of entries) {
-        if (!entry.isDirectory() && !entry.isSymbolicLink()) {
-          continue;
-        }
-
-        if (
-          entry.name.startsWith(".") ||
-          entry.name === "node_modules" ||
-          entry.name === "dist"
-        ) {
-          continue;
-        }
-
-        const fullPath = join(currentDir, entry.name);
-
-        if (isGitDirectory(fullPath)) {
-          repos.push(fullPath);
-        } else if (currentDepth < maxDepth) {
-          search(fullPath, currentDepth + 1);
-        }
-      }
+      entries = readdirSync(currentDir, { withFileTypes: true });
     } catch {
-      // Inaccessible directory
+      return;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) {
+        continue;
+      }
+
+      if (
+        entry.name.startsWith(".") ||
+        entry.name === "node_modules" ||
+        entry.name === "dist"
+      ) {
+        continue;
+      }
+
+      const fullPath = join(currentDir, entry.name);
+
+      if (isGitDirectory(fullPath)) {
+        repos.push(fullPath);
+      } else if (currentDepth < maxDepth) {
+        search(fullPath, currentDepth + 1);
+      }
     }
   };
 
@@ -176,7 +176,7 @@ const findSubRepos = (dir: string, maxDepth = 2): string[] => {
 export const resolveTargetWorkdir = (
   baseDir: string,
   requestedDir?: string
-): ResolvedTargetWorkdir => {
+) => {
   if (requestedDir !== undefined) {
     const resolvedDir = resolve(baseDir, requestedDir);
 
@@ -229,11 +229,11 @@ export const resolveTargetWorkdir = (
   };
 };
 
-const counterKey = (scope: string): string => `counter/${scope}`;
+const counterKey = (scope: string) => `counter/${scope}`;
 
-const prefix = (scope: string): string => `snap/${scope}/`;
+const prefix = (scope: string) => `snap/${scope}/`;
 
-export const counter = (ctx: Context, scope: string): Effect.Effect<number> =>
+export const counter = (ctx: Context, scope: string) =>
   Effect.gen(function* readCounter() {
     const value = yield* ctx.storage.get(counterKey(scope));
 
@@ -246,10 +246,7 @@ export const counter = (ctx: Context, scope: string): Effect.Effect<number> =>
       : -1;
   });
 
-export const invalidate = (
-  ctx: Context,
-  scope: string
-): Effect.Effect<number> =>
+export const invalidate = (ctx: Context, scope: string) =>
   storageLock.withPermits(1)(
     Effect.gen(function* incrementCounter() {
       const previous = yield* counter(ctx, scope);
@@ -262,10 +259,7 @@ export const invalidate = (
     })
   );
 
-export const invalidateOwned = (
-  ctx: Context,
-  attempt: Pending
-): Effect.Effect<void> =>
+export const invalidateOwned = (ctx: Context, attempt: Pending) =>
   storageLock.withPermits(1)(
     Effect.gen(function* invalidateAttempt() {
       if ((yield* counter(ctx, attempt.scope)) === attempt.counter) {
@@ -281,7 +275,7 @@ export const recordState = (
   attempt: Pending,
   state: CaptureState,
   reason = ""
-): Effect.Effect<void> =>
+) =>
   storageLock.withPermits(1)(
     Effect.gen(function* storeState() {
       if ((yield* counter(ctx, attempt.scope)) !== attempt.counter) {
@@ -295,10 +289,7 @@ export const recordState = (
     })
   );
 
-export const captureStatus = (
-  ctx: Context,
-  scope: string
-): Effect.Effect<string> =>
+export const captureStatus = (ctx: Context, scope: string) =>
   Effect.gen(function* readCaptureStatus() {
     const value = yield* ctx.storage.get(`state/${scope}`);
 
@@ -350,7 +341,7 @@ const scanStoragePrefix = (
   ctx: Context,
   keyPrefix: string,
   visitor: (entry: { key: string; value: JsonValue }) => Effect.Effect<void>
-): Effect.Effect<void> =>
+) =>
   Effect.gen(function* scan() {
     let after: string | undefined;
 
@@ -375,15 +366,12 @@ const snapshotChecksum = (
   generation: string,
   sequence: string,
   baseline: Baseline
-): string =>
+) =>
   digest(
     JSON.stringify([version, scope, count, generation, sequence, baseline])
   );
 
-export const load = (
-  ctx: Context,
-  scope: string
-): Effect.Effect<Baseline | undefined> =>
+export const load = (ctx: Context, scope: string) =>
   storageLock.withPermits(1)(
     Effect.gen(function* readBaseline() {
       const current = yield* counter(ctx, scope);
@@ -434,12 +422,11 @@ export const load = (
     })
   );
 
-// Each line is a base64-encoded Git result. No Git output enters the shell result.
 const captureCommand = (
   path: string,
   watchdogSeconds: number,
   platform: NodeJS.Platform
-): string => {
+) => {
   if (platform === "win32") {
     return windowsCaptureCommand(path, watchdogSeconds);
   }
@@ -461,7 +448,6 @@ if git config --get user.signingkey >/dev/null 2>&1; then printf "set\\n" >> "$o
 printf "END\\n" >> "$out"
 printf "RECEIPT_OK\\n"`;
 
-  // Bash job control assigns a process group to the worker, including its Git children.
   return `bash -c 'set -m
 bash -c "$1" bash "$2" &
 worker=$!
@@ -481,10 +467,7 @@ wait "$watchdog" 2>/dev/null
 exit "$status"' bash '${script.replaceAll("'", "'\\''")}' ${quoted} 2>/dev/null`;
 };
 
-const windowsCaptureCommand = (
-  path: string,
-  watchdogSeconds: number
-): string => {
+const windowsCaptureCommand = (path: string, watchdogSeconds: number) => {
   const watchdogMs = Math.round(watchdogSeconds * 1000);
 
   const script = `$ErrorActionPreference = 'Stop'
@@ -571,7 +554,7 @@ export const createPending = (
   watchdogSeconds = 15,
   platform: NodeJS.Platform = process.platform,
   now = 0
-): Pending => {
+) => {
   const directory = mkdtempSync(join(tmpdir(), "commit-context-"));
 
   try {
@@ -588,7 +571,7 @@ export const createPending = (
 
     const stat = fstatSync(fd);
 
-    return {
+    const attempt: Pending = {
       scope,
       sessionID,
       agent,
@@ -601,13 +584,15 @@ export const createPending = (
       expires: now + captureTimeout,
       command: captureCommand(file, watchdogSeconds, platform),
     };
+
+    return attempt;
   } catch (error) {
     rmSync(directory, { recursive: true, force: true });
     throw error;
   }
 };
 
-export const cleanup = (pending: Pending): void => {
+export const cleanup = (pending: Pending) => {
   if (pending.closed === true) {
     return;
   }
@@ -617,7 +602,7 @@ export const cleanup = (pending: Pending): void => {
   rmSync(pending.directory, { recursive: true, force: true });
 };
 
-const decode = (line: string): string => {
+const decode = (line: string) => {
   if (
     !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(
       line
@@ -632,7 +617,7 @@ const decode = (line: string): string => {
 const readCaptureArtifact = (
   pending: Pending,
   platform: NodeJS.Platform = process.platform
-): string[] => {
+) => {
   const stat = fstatSync(pending.fd);
 
   if (
@@ -677,7 +662,7 @@ const readCaptureArtifact = (
   return fields;
 };
 
-const decodeConfigField = (state: string, field: string): string | null => {
+const decodeConfigField = (state: string, field: string) => {
   if (state === "set") {
     return decode(field).trim();
   }
@@ -689,7 +674,7 @@ const assertBaselineIdentity = (
   baseline: Baseline,
   fields: readonly string[],
   rawLog: string
-): void => {
+) => {
   const { directory, gitDir, commonDir, head, messages } = baseline;
 
   if (
@@ -713,7 +698,7 @@ const assertBaselineIdentity = (
 export const importCapture = (
   pending: Pending,
   platform: NodeJS.Platform = process.platform
-): Baseline => {
+) => {
   const fields = readCaptureArtifact(pending, platform);
   const rawRoot = decode(fields[1] ?? "").trimEnd();
   const root = isAbsolute(rawRoot) ? realpathSync(resolve(rawRoot)) : rawRoot;
@@ -732,7 +717,6 @@ export const importCapture = (
       ? []
       : rawLog.split("\0\0").filter((message) => message.length > 0);
 
-  // Decode the boolean field even when unset, preserving strict base64 framing.
   const value = decode(fields[10] ?? "").trim();
 
   let gpgsign: Baseline["gpgsign"] = fields[9] === "unset" ? "unset" : "error";
@@ -764,7 +748,7 @@ export const publish = (
   generation: string,
   baseline: Baseline,
   now: number
-): Effect.Effect<boolean> =>
+) =>
   storageLock.withPermits(1)(
     Effect.gen(function* writeBaseline() {
       if ((yield* counter(ctx, pending.scope)) !== pending.counter) {

@@ -39,6 +39,7 @@ export interface ShellToken {
   readonly value: string;
   readonly substitutions?: readonly string[];
   readonly expansion?: boolean;
+  readonly grouped?: boolean;
   readonly heredoc?: { readonly body: string; readonly quoted: boolean };
   readonly hereString?: { readonly body: string; readonly quoted: boolean };
 }

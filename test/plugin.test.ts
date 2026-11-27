@@ -9,7 +9,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { gunzipSync } from "node:zlib";
 
 import { Tool } from "@opencode/plugin/effect";
 import { Effect } from "effect";
@@ -18,9 +17,13 @@ import { resolveTargetWorkdir } from "../src/capture.js";
 import { parseConfig } from "../src/config.js";
 import type { JsonValue } from "../src/types.js";
 import { isJSONString, isRecord } from "../src/types.js";
-import { createTempRepo, expectRejects, withFakeNow } from "./helpers.js";
-import { createHost } from "./host.js";
-import type { Host, HostOptions } from "./host.js";
+import { createTempRepo, expectRejects } from "./helpers.test-utils.js";
+import { createHost } from "./host.test-utils.js";
+import type { Host, HostOptions } from "./host.test-utils.js";
+
+const pwshBinary = Bun.which("pwsh");
+
+const hasPwsh = process.platform === "win32" || pwshBinary !== null;
 
 const { join } = path;
 
@@ -39,9 +42,7 @@ interface Fixture {
   readonly host: (options: HostOptions) => Promise<Host>;
 }
 
-const withFixture = async (
-  run: (fixture: Fixture) => Promise<void>
-): Promise<void> => {
+const withFixture = async (run: (fixture: Fixture) => Promise<void>) => {
   const teardown: (() => void)[] = [];
   const hosts: Host[] = [];
 
@@ -78,28 +79,24 @@ const withFixture = async (
   }
 };
 
-const scenario =
-  (run: (fixture: Fixture) => Promise<void>) => async (): Promise<void> => {
-    await withFixture(run);
-  };
+const scenario = (run: (fixture: Fixture) => Promise<void>) => async () => {
+  await withFixture(run);
+};
 
 type Result = Awaited<ReturnType<Host["execute"]>>;
 
-const text = (result: Result): string =>
+const text = (result: Result) =>
   result.content
     .flatMap((part) => (part.type === "text" ? [part.text] : []))
     .join("\n");
 
-const context = async (
-  host: Host,
-  input: Record<string, JsonValue> = {}
-): Promise<string> => text(await host.execute("commit_context", input));
+const context = async (host: Host, input: Record<string, JsonValue> = {}) =>
+  text(await host.execute("commit_context", input));
 
-const commandOf = (instructions: string): string =>
+const commandOf = (instructions: string) =>
   instructions.split("\n").slice(1).join("\n");
 
-/** Extracts the private artifact path from a POSIX or Windows capture command. */
-const artifactOf = (command: string): string => {
+const artifactOf = (command: string) => {
   const posix = / '(?<artifact>[^']+)' 2>\/dev\/null$/u.exec(command)?.groups
     ?.artifact;
 
@@ -110,12 +107,10 @@ const artifactOf = (command: string): string => {
   const encoded = /-EncodedCommand (?<encoded>[A-Za-z0-9+/=]+)$/u.exec(command)
     ?.groups?.encoded;
 
-  const compressed = /FromBase64String\('(?<compressed>[^']+)'\)\)/u.exec(
-    Buffer.from(encoded ?? "", "base64").toString("utf16le")
-  )?.groups?.compressed;
+  const decoded = Buffer.from(encoded ?? "", "base64").toString("utf16le");
 
   const encodedPath = /\$path = .*FromBase64String\('(?<path>[^']+)'\)/u.exec(
-    gunzipSync(Buffer.from(compressed ?? "", "base64")).toString()
+    decoded
   )?.groups?.path;
 
   if (encodedPath === undefined) {
@@ -130,7 +125,7 @@ const shell = async (
   command: string,
   workdir?: string,
   extra: Record<string, JsonValue> = {}
-): Promise<Result> =>
+) =>
   await host.execute(
     "shell",
     workdir === undefined
@@ -143,13 +138,12 @@ const capture = async (
   workdir: string,
   input: Record<string, JsonValue> = {},
   extra: Record<string, JsonValue> = {}
-): Promise<Result> =>
-  await shell(host, commandOf(await context(host, input)), workdir, extra);
+) => await shell(host, commandOf(await context(host, input)), workdir, extra);
 
 const rejects = async (
   promise: Promise<unknown>,
   expected: string | RegExp
-): Promise<Error> => {
+) => {
   const error = await expectRejects(promise, expected);
 
   expect(error).toBeInstanceOf(Tool.Error);
@@ -157,7 +151,7 @@ const rejects = async (
   return error;
 };
 
-const toolError = (outcome: PromiseSettledResult<Result>): Tool.Error => {
+const toolError = (outcome: PromiseSettledResult<Result>) => {
   if (
     outcome.status === "fulfilled" ||
     !(outcome.reason instanceof Tool.Error)
@@ -185,11 +179,10 @@ const invalidShellInputs: JsonValue[] = [
   { command: "git status", background: "false" },
 ];
 
-const failureNote = (reason: string): string =>
+const failureNote = (reason: string) =>
   `[commit-guard] This capture did not publish a usable baseline: ${reason}.\n` +
   "RECEIPT_OK alone does not authorize a commit.\nCall commit_context with the same workdir for status and next steps.";
 
-/** Holds a matching shell call after the guard claims it, until released. */
 const holdShell = async (host: Host, command: string) => {
   const reached = Promise.withResolvers<undefined>();
   const released = Promise.withResolvers<undefined>();
@@ -211,8 +204,7 @@ const holdShell = async (host: Host, command: string) => {
   };
 };
 
-/** Returns the JSON text of an execute script's return value. */
-const scriptOutput = (result: Result): string => {
+const scriptOutput = (result: Result) => {
   const output: unknown = result.output;
 
   if (!isRecord(output) || !isJSONString(output.output)) {
@@ -307,7 +299,7 @@ describe("normal mode capture", () => {
 
         if (signing === "true") {
           await rejects(unsigned, "Missing commit signoff");
-          // Without a signing key, Git itself cannot finish a signed commit.
+
           await shell(host, 'git commit -s -m "kernel: add foo"', directory);
 
           return;
@@ -513,8 +505,6 @@ describe("capture failure paths", () => {
 
         const host = await start({
           directory,
-          // Rewrites the real result, for example into the worker-restart
-          // variant, before the guard's execute.after hook observes it.
           setup: (ctx) =>
             ctx.tool.hook("execute.after", (event) =>
               Effect.sync(() => {
@@ -572,7 +562,7 @@ describe("capture failure paths", () => {
 
       const host = await start({
         directory,
-        // A host shell wrapper that skips the capture leaves no artifact.
+
         setup: (ctx) =>
           ctx.shell.hook("create.before", (event) =>
             Effect.sync(() => {
@@ -1098,58 +1088,151 @@ describe("full Code Mode", () => {
 });
 
 describe("fake clock boundaries", () => {
-  test.serial(
+  test(
     "sweeps abandoned unclaimed artifacts and keeps claimed artifacts",
     scenario(async ({ repo, host: start }) => {
       const directory = repo();
-      const host = await start({ directory });
+      const host = await start({ directory, testClock: true });
+      const expiredCommand = commandOf(await context(host));
+      const artifact = artifactOf(expiredCommand);
 
-      await withFakeNow(async (advance) => {
-        const artifact = artifactOf(commandOf(await context(host)));
+      expect(existsSync(artifact)).toBe(true);
+      await host.advance(21_000);
+      await rejects(
+        shell(host, expiredCommand, directory),
+        "expired after 20 seconds"
+      );
+      expect(existsSync(artifact)).toBe(false);
+      expect(await context(host)).toContain(
+        "previous capture expired before its command was claimed"
+      );
 
-        expect(existsSync(artifact)).toBe(true);
-        advance(21_000);
-        await shell(host, "git status --short", directory);
-        expect(existsSync(artifact)).toBe(false);
-        expect(await context(host)).toContain(
-          "previous capture expired before its command was claimed"
-        );
+      const command = commandOf(await context(host, { refresh: true }));
+      const held = await holdShell(host, command);
+      const running = shell(host, command, directory);
 
-        const command = commandOf(await context(host, { refresh: true }));
-        const held = await holdShell(host, command);
-        const running = shell(host, command, directory);
-
-        await held.reached;
-        advance(60_000);
-        await shell(host, "git status --short", directory);
-        expect(existsSync(artifactOf(command))).toBe(true);
-        held.release();
-        expect(text(await running)).toContain(frozen);
-      });
+      await held.reached;
+      await host.advance(60_000);
+      await shell(host, "git status --short", directory);
+      expect(existsSync(artifactOf(command))).toBe(true);
+      held.release();
+      expect(text(await running)).toContain(frozen);
     }),
     timeout
   );
 
-  test.serial(
+  test(
     "keeps a claimed capture alive while approval is slow",
     scenario(async ({ repo, host: start }) => {
       const directory = repo();
-      const host = await start({ directory });
+      const host = await start({ directory, testClock: true });
+      const command = commandOf(await context(host));
+      const held = await holdShell(host, command);
+      const running = shell(host, command, directory);
 
-      await withFakeNow(async (advance) => {
-        const command = commandOf(await context(host));
+      await held.reached;
+      await host.advance(45_000);
+      held.release();
+      expect(text(await running)).toContain(frozen);
+      await shell(host, 'git commit -s -m "kernel: approved"', directory);
+    }),
+    timeout
+  );
 
-        await host.hook("execute.before", (event) =>
-          Effect.sync(() => {
-            if (isRecord(event.input) && event.input.command === command) {
-              advance(45_000);
-            }
-          })
-        );
+  test(
+    "refreshes expiry on repeated commit_context and replaces unclaimed capture on workdir change",
+    scenario(async ({ repo, host: start }) => {
+      const directory = repo();
+      const sub = join(directory, "sub");
 
-        expect(text(await shell(host, command, directory))).toContain(frozen);
-        await shell(host, 'git commit -s -m "kernel: approved"', directory);
+      mkdirSync(sub);
+      const host = await start({ directory, testClock: true });
+      const first = commandOf(await context(host));
+
+      await host.advance(15_000);
+      expect(await context(host)).toContain("still pending and unclaimed");
+      await host.advance(15_000);
+      await shell(host, "git status --short", directory);
+      expect(existsSync(artifactOf(first))).toBe(true);
+
+      const replaced = commandOf(await context(host, { workdir: "sub" }));
+
+      expect(replaced).not.toBe(first);
+      expect(existsSync(artifactOf(first))).toBe(false);
+      await rejects(
+        shell(host, replaced, directory),
+        /resolved workdir .* does not match expected workdir .*refresh: true/u
+      );
+      await rejects(
+        shell(host, replaced, sub, { background: true }),
+        /background: true is not allowed.*refresh: true/u
+      );
+      expect(text(await shell(host, replaced, sub))).toContain(frozen);
+    }),
+    timeout
+  );
+});
+
+describe("PowerShell 7 (pwsh) host E2E", () => {
+  test.skipIf(!hasPwsh)(
+    "captures context and validates pwsh commits including here-string stdin",
+    scenario(async ({ repo, host: start }) => {
+      const directory = repo();
+
+      const host = await start({
+        directory,
+        shell: pwshBinary ?? "pwsh",
       });
+
+      const result = await capture(host, directory);
+
+      expect(text(result)).toContain(frozen);
+
+      const rejected = await rejects(
+        shell(host, "git commit -s -m 'missing scope'", directory),
+        "Missing scope"
+      );
+
+      expect(rejected.message).toContain("@'\n");
+      expect(rejected.message).not.toContain("$'");
+
+      const singleQuoted = await shell(
+        host,
+        "git commit --allow-empty -s -m 'core: Don''t break'",
+        directory
+      );
+
+      expect(singleQuoted.metadata?.exit).toBe(0);
+
+      const piped = await shell(
+        host,
+        "@'\ncore: Piped pwsh body\n\nSecond line from here-string.\n'@ | git commit --allow-empty -s -F -",
+        directory
+      );
+
+      expect(piped.metadata?.exit).toBe(0);
+    }),
+    timeout
+  );
+
+  test.skipIf(!hasPwsh)(
+    "reports explicit 20s expiry for an expired pwsh capture command",
+    scenario(async ({ repo, host: start }) => {
+      const directory = repo();
+
+      const host = await start({
+        directory,
+        shell: pwshBinary ?? "pwsh",
+        testClock: true,
+      });
+
+      const expiredCommand = commandOf(await context(host));
+
+      await host.advance(21_000);
+      await rejects(
+        shell(host, expiredCommand, directory),
+        "expired after 20 seconds"
+      );
     }),
     timeout
   );

@@ -30,6 +30,7 @@ import type {
   CommitGuardConfig,
   GitCommitInvocation,
   JsonValue,
+  ShellMode,
 } from "./types.js";
 import { validateGitCommits } from "./validator.js";
 
@@ -59,29 +60,28 @@ const publicationGuidance =
 const receiptGuidance =
   "RECEIPT_OK confirms only that the artifact was written, not that the baseline was published.";
 
-const toToolError = (cause: unknown): Tool.Error => {
-  if (Cause.isUnknownError(cause)) {
-    return toToolError(cause.cause);
+const toToolError = (cause: unknown) => {
+  let current = cause;
+
+  while (Cause.isUnknownError(current)) {
+    current = current.cause;
   }
 
-  return cause instanceof Tool.Error
-    ? cause
+  return current instanceof Tool.Error
+    ? current
     : new Tool.Error({
         message:
-          cause instanceof Error
-            ? cause.message
+          current instanceof Error
+            ? current.message
             : "[commit-guard] Git commit validation failed.",
-        error: cause,
+        error: current,
       });
 };
 
-const signingError = (setting: string): string =>
+const signingError = (setting: string) =>
   `[commit-guard] Git could not read ${setting} as valid. Repeating the capture will not fix it. Inspect with git config --show-origin --get-all ${setting}; fix the value without changing the intended signing policy, then call commit_context with refresh:true.`;
 
-const baselineGuidance = (
-  baseline: Baseline,
-  config: CommitGuardConfig
-): string => {
+const baselineGuidance = (baseline: Baseline, config: CommitGuardConfig) => {
   if (baseline.gpgsign === "error" || baseline.signingkey === "error") {
     return signingError(
       baseline.gpgsign === "error" ? "commit.gpgsign" : "user.signingkey"
@@ -120,11 +120,11 @@ const baselineGuidance = (
   );
 };
 
-const captureInstructions = (attempt: Pending, status: string): string =>
+const captureInstructions = (attempt: Pending, status: string) =>
   `${status}Run this shell command immediately, unchanged, in the foreground with workdir ${attempt.workdir} (do not run it in the background). ` +
   `Do not wrap it or chain another command onto it. ${publicationGuidance} ${receiptGuidance}\n${attempt.command}`;
 
-const rememberExpired = (state: GuardState, command: string): void => {
+const rememberExpired = (state: GuardState, command: string) => {
   const trimmed = command.trim();
   state.recentExpired.delete(trimmed);
   state.recentExpired.add(trimmed);
@@ -138,7 +138,7 @@ const rememberExpired = (state: GuardState, command: string): void => {
   }
 };
 
-const expiredCaptureError = (): Error =>
+const expiredCaptureError = () =>
   new Error(
     "[commit-guard] This commit_context capture command expired after 20 seconds before it was claimed. Call commit_context right before committing and run the returned command immediately, unchanged, in the foreground."
   );
@@ -164,7 +164,7 @@ const sweep = (state: GuardState) =>
 const resolveCanonicalWorkdir = (
   sessionDirectory: string,
   workdir: JsonValue | undefined
-): string => {
+) => {
   try {
     return realpathSync(
       isJSONString(workdir)
@@ -182,7 +182,7 @@ const validateFields = (
   input: BeforeEvent["input"],
   fields: readonly string[],
   booleans: readonly string[]
-): Record<string, JsonValue | undefined> => {
+) => {
   if (!isRecord(input)) {
     throw new Error(
       "[commit-guard] Cannot inspect non-object tool input. Supply literal command and workdir fields."
@@ -374,7 +374,7 @@ const claimMismatchReason = (
   input: Record<string, JsonValue | undefined>,
   attempt: Pending,
   sessionDirectory: string
-): string | undefined => {
+) => {
   if (event.tool !== "shell") {
     return `tool "${event.tool}" is not "shell"`;
   }
@@ -403,7 +403,7 @@ const claimMismatchReason = (
     return `resolved workdir ${resolvedWorkdir} does not match expected workdir ${attempt.workdir}`;
   }
 
-  return undefined;
+  return null;
 };
 
 const claimCapture = (
@@ -433,9 +433,32 @@ const claimCapture = (
     const sessionDirectory =
       session.location.directory ?? state.ctx.location.directory;
 
+    const nowAfterSession = yield* state.clock.currentTimeMillis;
+
+    if (state.pending.get(attempt.scope) !== attempt) {
+      yield* Effect.fail(
+        new Error(
+          "[commit-guard] Capture is no longer active. Call commit_context with refresh: true."
+        )
+      );
+
+      return;
+    }
+
+    if (attempt.claimed === undefined && nowAfterSession >= attempt.expires) {
+      state.pending.delete(attempt.scope);
+      rememberExpired(state, attempt.command);
+      cleanup(attempt);
+      yield* recordState(state.ctx, attempt, "expired");
+      yield* invalidateOwned(state.ctx, attempt);
+      yield* Effect.fail(expiredCaptureError());
+
+      return;
+    }
+
     const reason = claimMismatchReason(event, input, attempt, sessionDirectory);
 
-    if (reason !== undefined) {
+    if (reason !== null) {
       yield* Effect.fail(
         new Error(
           `[commit-guard] Capture must use its exact foreground shell command in the original session and workdir (${reason}). Call commit_context with refresh: true.`
@@ -454,6 +477,7 @@ const verifyBaselineAndValidate = (
   event: BeforeEvent,
   input: Record<string, JsonValue | undefined>,
   command: string,
+  shellMode: ShellMode,
   invocations: readonly GitCommitInvocation[]
 ) =>
   Effect.gen(function* validate() {
@@ -523,7 +547,8 @@ const verifyBaselineAndValidate = (
       validateGitCommits(
         invocations,
         { ...config, enforceSignoff: baseline.gpgsign === "true" },
-        command
+        command,
+        shellMode
       );
     });
 
@@ -589,12 +614,18 @@ const handleBeforeExecute = (state: GuardState, event: BeforeEvent) =>
 
     const trimmed = command.trim();
 
-    const modified = [...state.pending.values()].find(
-      (item) =>
+    const modified = [...state.pending.values()].find((item) => {
+      const encoded = /-EncodedCommand (?<payload>[A-Za-z0-9+/=]+)$/u.exec(
+        item.command
+      )?.groups?.payload;
+
+      return (
         item.command.trim() === trimmed ||
         command.includes(item.command) ||
-        command.includes(item.artifactPath)
-    );
+        command.includes(item.artifactPath) ||
+        (encoded !== undefined && command.includes(encoded))
+      );
+    });
 
     if (modified !== undefined) {
       yield* Effect.fail(
@@ -630,6 +661,7 @@ const handleBeforeExecute = (state: GuardState, event: BeforeEvent) =>
         event,
         input,
         command,
+        shellMode,
         invocations
       );
     }
@@ -639,8 +671,7 @@ const allowedMetadataKeys = new Set(["status", "exit", "truncated", "timeout"]);
 
 const unexpectedMetadataKeys = (
   metadata: Record<string, JsonValue | undefined>
-): string[] =>
-  Object.keys(metadata).filter((key) => !allowedMetadataKeys.has(key));
+) => Object.keys(metadata).filter((key) => !allowedMetadataKeys.has(key));
 
 const isVerifiedShellMetadata = (
   metadata: unknown
@@ -726,7 +757,7 @@ const publishCapturedAttempt = (
     return baseline;
   });
 
-const appendCaptureNote = (result: Tool.Result, note: string): Tool.Result => {
+const appendCaptureNote = (result: Tool.Result, note: string) => {
   const content: readonly Tool.Content[] = isJSONString(result.content)
     ? [{ type: "text", text: result.content }]
     : (result.content ?? []);
@@ -747,11 +778,7 @@ const appendCaptureNote = (result: Tool.Result, note: string): Tool.Result => {
     : annotated;
 };
 
-const rememberFailure = (
-  state: GuardState,
-  scope: string,
-  reason: string
-): void => {
+const rememberFailure = (state: GuardState, scope: string, reason: string) => {
   state.failures.delete(scope);
   state.failures.set(
     scope,
