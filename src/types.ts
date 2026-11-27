@@ -32,12 +32,15 @@ export const defaultConfig: CommitGuardConfig = {
 
 export type ShellTokenType = "word" | "operator" | "redirect";
 
+export type ShellMode = "posix" | "pwsh";
+
 export interface ShellToken {
   readonly type: ShellTokenType;
   readonly value: string;
   readonly substitutions?: readonly string[];
   readonly expansion?: boolean;
   readonly heredoc?: { readonly body: string; readonly quoted: boolean };
+  readonly hereString?: { readonly body: string; readonly quoted: boolean };
 }
 
 export interface GitCommitInvocation {

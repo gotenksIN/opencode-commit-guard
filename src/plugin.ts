@@ -530,6 +530,29 @@ const verifyBaselineAndValidate = (
     return yield* Effect.void;
   });
 
+const isPwshTool = (state: GuardState, event: BeforeEvent) =>
+  Effect.gen(function* detectPwsh() {
+    const description = event.info?.description;
+
+    if (isJSONString(description)) {
+      return /using pwsh\./iu.test(description);
+    }
+
+    const tools = yield* state.ctx.tool
+      .list()
+      .pipe(Effect.orElseSucceed(() => []));
+
+    const shellTool =
+      tools.find((item) => item.id === event.tool) ??
+      tools.find((item) => item.id === "shell");
+
+    if (shellTool !== undefined && isJSONString(shellTool.description)) {
+      return /using pwsh\./iu.test(shellTool.description);
+    }
+
+    return process.platform === "win32";
+  });
+
 const handleBeforeExecute = (state: GuardState, event: BeforeEvent) =>
   Effect.gen(function* before() {
     yield* sweep(state);
@@ -592,7 +615,11 @@ const handleBeforeExecute = (state: GuardState, event: BeforeEvent) =>
       return;
     }
 
-    const invocations = yield* Effect.try(() => extractGitCommits(command));
+    const shellMode = (yield* isPwshTool(state, event)) ? "pwsh" : "posix";
+
+    const invocations = yield* Effect.try(() =>
+      extractGitCommits(command, { shell: shellMode })
+    );
 
     if (
       invocations.length > 0 &&
